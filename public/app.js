@@ -45,14 +45,21 @@ function chooseProvider() {
   return providers.find((p) => p?.isMiniPay) || providers.find((p) => p?.isMetaMask) || providers[0] || null;
 }
 
-function displayAccount(address) {
+async function chainIdOf(provider) {
+  try { return String(await provider.request({ method: 'eth_chainId' })).toLowerCase(); }
+  catch { return null; }
+}
+
+function displayAccount(address, celoState = null) {
   account = address || null;
   const button = $('#walletButton');
   if (!button) return;
   if (account) {
     button.textContent = `${account.slice(0, 6)}…${account.slice(-4)}`;
     button.classList.add('connected');
-    setWalletStatus('Connected on Celo · wallet remains the signer', 'ok');
+    if (celoState === true) setWalletStatus('Connected on Celo · wallet remains the signer', 'ok');
+    else if (celoState === false) setWalletStatus('Wallet connected · switch to Celo before execution', 'warn');
+    else setWalletStatus('Wallet connected · checking network…');
   } else {
     button.textContent = 'Connect wallet';
     button.classList.remove('connected');
@@ -93,10 +100,15 @@ async function ensureCelo(provider = walletProvider) {
 function bindWalletEvents(provider) {
   if (walletListenersBound || !provider?.on) return;
   walletListenersBound = true;
-  provider.on('accountsChanged', (accounts) => displayAccount(accounts?.[0] || null));
+  provider.on('accountsChanged', async (accounts) => {
+    if (!accounts?.[0]) return displayAccount(null);
+    const chainId = await chainIdOf(provider);
+    displayAccount(accounts[0], chainId === CELO_CHAIN_HEX);
+  });
   provider.on('chainChanged', (chainId) => {
-    if (String(chainId).toLowerCase() === CELO_CHAIN_HEX) setWalletStatus('Connected on Celo · wallet remains the signer', 'ok');
-    else setWalletStatus('Wallet connected, but switch to Celo before execution', 'warn');
+    const onCelo = String(chainId).toLowerCase() === CELO_CHAIN_HEX;
+    if (account) displayAccount(account, onCelo);
+    else if (onCelo) setWalletStatus('Celo network selected · connect wallet to enable execution', 'ok');
   });
 }
 
@@ -118,7 +130,7 @@ async function connectWallet() {
     if (!accounts?.[0]) throw new Error('Wallet returned no account.');
     await ensureCelo(provider);
     bindWalletEvents(provider);
-    displayAccount(accounts[0]);
+    displayAccount(accounts[0], true);
     return accounts[0];
   } catch (error) {
     const rejected = error?.code === 4001;
@@ -140,8 +152,12 @@ async function initializeWallet() {
   bindWalletEvents(provider);
   try {
     const accounts = await provider.request({ method: 'eth_accounts' });
-    if (accounts?.[0]) displayAccount(accounts[0]);
-    else setWalletStatus('Wallet detected · click Connect wallet to enable execution');
+    if (accounts?.[0]) {
+      const chainId = await chainIdOf(provider);
+      displayAccount(accounts[0], chainId === CELO_CHAIN_HEX);
+    } else {
+      setWalletStatus('Wallet detected · click Connect wallet to enable execution');
+    }
   } catch {
     setWalletStatus('Wallet detected · click Connect wallet to enable execution');
   }
@@ -224,6 +240,7 @@ async function execute() {
   setWalletStatus(`Requesting ${lastPrepared.asset} signature from your wallet…`);
   try {
     await ensureCelo(walletProvider);
+    displayAccount(account, true);
     const hash = await walletProvider.request({
       method: 'eth_sendTransaction',
       params: [{ from: account, to: lastPrepared.to, data: lastPrepared.data, value: '0x0' }]
