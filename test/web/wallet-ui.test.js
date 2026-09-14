@@ -77,3 +77,17 @@ test('wallet connection requests accounts and then switches to Celo', async () =
   assert.equal(switchIndex, requestIndex + 1);
   assert.match(get('#walletStatus').textContent, /Celo|connected/i);
 });
+
+test('passively discovered account on another chain is not mislabeled as connected on Celo', async () => {
+  const provider = {
+    async request(payload) {
+      if (payload.method === 'eth_accounts') return ['0x1234567890123456789012345678901234567890'];
+      if (payload.method === 'eth_chainId') return '0x1';
+      return [];
+    },
+    on() {}
+  };
+  const { get } = await loadApp({ ethereum: provider });
+  assert.match(get('#walletStatus').textContent, /switch to Celo|wrong network/i);
+  assert.doesNotMatch(get('#walletStatus').textContent, /^Connected on Celo/i);
+});
