@@ -17,7 +17,7 @@ export function getPublicStatus(env = process.env) {
     erc8004: { ...ERC8004 },
     x402: { facilitatorUrl: env.X402_FACILITATOR_URL || CELO_MAINNET.x402FacilitatorUrl, network: CELO_MAINNET.caip2, model: 'policy-gated exact payment' },
     assets: Object.fromEntries(Object.entries(ASSETS).map(([key, value]) => [key, { ...value }])),
-    circuitCore: { repository: 'Ronlin1/circuit', commit: 'fed101ed4675dab240c322eb2318e5ce8564fe65' },
+    controlCore: { module: 'circuit-core', revision: 'fed101ed4675dab240c322eb2318e5ce8564fe65' },
     verdictPrecedence: ['PAUSE', 'BLOCK', 'REVIEW', 'RESIZE', 'ALLOW']
   });
 }

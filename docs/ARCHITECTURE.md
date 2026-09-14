@@ -28,22 +28,22 @@ Worker Agent ──► typed ActionIntent
                        Celo Mainnet
 ```
 
-## Reused core
+## Control core
 
-`circuit-core` is pinned to original CIRCUIT commit `fed101ed4675dab240c322eb2318e5ce8564fe65`. The Celo fork directly imports its deterministic policy and SHA-256 Flight Recorder modules. This makes the hackathon delta explicit rather than pretending the prior work was rebuilt during this event.
+Deterministic policy and Flight Recorder primitives are loaded through a pinned `circuit-core` revision (`fed101ed4675dab240c322eb2318e5ce8564fe65`). The Celo-specific policy, identity, x402, execution, API, and wallet layers remain isolated in this repository. Pinning the control core keeps authorization behavior reproducible across environments.
 
 ## Why no custody
 
-The public deployment defaults to `PREPARE`. An ALLOW creates executable calldata but never signs it. The browser wallet remains the authority for the final transaction. This means CIRCUIT can demonstrate real independent-user payments without centralizing private keys.
+The public deployment defaults to `PREPARE`. An `ALLOW` verdict creates executable calldata but never signs it. The connected browser wallet remains the authority for the final transaction, allowing CIRCUIT to enforce runtime policy without centralizing private keys.
 
 ## x402 position
 
-CIRCUIT sits immediately before the payment-signature step. `/api/x402-authorize` evaluates the resource price, agent identity, budget, asset and recipient policy. The facilitator is a settlement component, not the policy authority, and can be configured separately.
+CIRCUIT sits immediately before the payment-signature step. `/api/x402-authorize` evaluates resource price, agent identity, budget, asset, and recipient policy before settlement is permitted. The facilitator remains a settlement component rather than a policy authority and can be configured independently.
 
 ## ERC-8004
 
-The live identity route calls the Celo mainnet Identity Registry `ownerOf(agentId)`. Onchain registration becomes evidence used by the deterministic mandate; it is not treated as proof that an agent is universally trustworthy.
+The identity route queries the Celo mainnet Identity Registry with `ownerOf(agentId)`. Onchain registration is treated as policy evidence, not as proof that an agent is universally trustworthy.
 
 ## Flight Recorder
 
-Every API evaluation records intent + verdict + prepared-transaction metadata through the original hash-linked Flight Recorder. No secret or private key is written to the trace.
+Every authorization evaluation records the intent, verdict, and prepared-transaction metadata in a SHA-256 hash-linked Flight Recorder. No wallet private key or secret is written to the trace.
