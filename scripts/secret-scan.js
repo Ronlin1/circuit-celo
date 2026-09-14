@@ -6,7 +6,7 @@ const findings = [];
 const patterns = [
   [/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g, 'private key block'],
   [/\b0x[0-9a-fA-F]{64}\b/g, 'raw 32-byte hex secret candidate'],
-  [/(?:PRIVATE_KEY|X402_API_KEY)\s*=\s*[^\s#][^\r\n]*/g, 'populated secret env value']
+  [/(?:PRIVATE_KEY|X402_API_KEY)[ \t]*=[ \t]*[^\s#][^\r\n]*/g, 'populated secret env value']
 ];
 function walk(path) {
   for (const name of readdirSync(path)) {
@@ -15,7 +15,10 @@ function walk(path) {
     if (statSync(full).isDirectory()) walk(full);
     else if (!/\.(png|jpg|jpeg|gif|ico|woff2?)$/i.test(full)) {
       const text = readFileSync(full, 'utf8');
-      for (const [regex, label] of patterns) if (regex.test(text)) findings.push(`${full}: ${label}`);
+      for (const [regex, label] of patterns) {
+        regex.lastIndex = 0;
+        if (regex.test(text)) findings.push(`${full}: ${label}`);
+      }
     }
   }
 }
