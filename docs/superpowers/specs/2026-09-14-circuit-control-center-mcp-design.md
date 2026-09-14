@@ -10,7 +10,7 @@ Evolve CIRCUIT Treasury from a strong policy demo into a production-shaped **con
 
 The upgraded product must work for two audiences at once:
 
-- **Humans** use a Control Center to connect wallets, inspect balances, configure/understand mandate limits, review decisions, and verify real transaction history.
+- **Humans** use a Control Center to connect wallets, inspect balances, understand mandate limits, review decisions, and verify real transaction history.
 - **Agents** use a remote MCP endpoint to inspect policy, request authorization, prepare transactions, verify identity/reputation, and inspect traces without receiving unrestricted signing authority.
 
 The core product invariant remains unchanged:
@@ -22,15 +22,16 @@ The core product invariant remains unchanged:
 The upgrade is successful when all of the following are true:
 
 1. Wallet connection is explicit, inspectable, and reversible from the CIRCUIT UI.
-2. A dashboard shows real, persistent treasury activity instead of only the current browser session.
-3. Historical decisions and submitted Celo transactions can be filtered and inspected.
+2. A dashboard shows real, persistent treasury activity instead of only transient server memory.
+3. Historical decisions and submitted Celo transactions can be filtered and inspected safely.
 4. CIRCUIT exposes a remote MCP endpoint at `/mcp` using the current stateless MCP HTTP model.
 5. MCP clients can call authorization tools but cannot bypass CIRCUIT policy or sign with a server-held user key.
 6. CIRCUIT can advertise its MCP endpoint through its own ERC-8004 registration metadata.
 7. Celo transactions can include the official ERC-8021 builder attribution suffix once the project tag is issued.
 8. The entire system remains Celo-mainnet-first and non-custodial.
-9. Regression, hostile-input, concurrency, and live smoke tests stay green.
-10. The product tells a clear hackathon story: **dashboard for humans, MCP for agents, deterministic policy in the middle, Celo for settlement.**
+9. Durable replay/budget evidence remains authoritative across serverless restarts and concurrent requests.
+10. Regression, hostile-input, concurrency, and live smoke tests stay green.
+11. The product tells a clear hackathon story: **dashboard for humans, MCP for agents, deterministic policy in the middle, Celo for settlement.**
 
 ## 3. Non-Goals for This Pass
 
@@ -70,6 +71,7 @@ The main structural gaps are:
 - no first-class disconnect/reconnect UI;
 - wallet details are compressed into a small header control;
 - no persistent activity store;
+- current daily-budget/replay evidence is process-memory scoped;
 - no dashboard metrics or transaction history;
 - public mandate is effectively a single demo policy;
 - x402 is authorization-focused rather than a complete paid-resource journey;
@@ -167,13 +169,15 @@ Connection also uses an explicit modal rather than silently firing provider requ
 
 ### 6.2 Disconnect Semantics
 
-`Disconnect` must always clear CIRCUIT local application state:
+`Disconnect` must always clear CIRCUIT local wallet/execution state:
 
 - `account = null`;
 - `walletProvider = null`;
 - prepared execution state cleared;
 - wallet UI returns to disconnected state;
-- any wallet-specific dashboard data is removed from the active view.
+- wallet-specific balances disappear from the active view.
+
+The browser's random CIRCUIT history session token is **not** automatically deleted on wallet disconnect, so a user can reconnect and still view the same local-browser CIRCUIT history. A separate `Clear local history token` action may rotate that token.
 
 Where the provider supports programmatic permission revocation, CIRCUIT may request it. Where it does not, the UI must state clearly that the dapp session is disconnected locally and provide instructions/open-wallet guidance for removing the site's permission inside the wallet.
 
@@ -192,7 +196,7 @@ The application must correctly handle:
 - Celo network loss;
 - reconnect with a different account.
 
-## 7. Persistent Activity and Transaction History
+## 7. Persistent Activity, Policy State, and Transaction History
 
 ### 7.1 Storage Interface
 
@@ -200,18 +204,45 @@ Introduce an `ActivityStore` abstraction so policy logic is not tied to one vend
 
 Implementations:
 
-- `MemoryActivityStore` for unit tests/local fallback;
+- `MemoryActivityStore` for unit tests/local development only;
 - `SupabaseActivityStore` for production durable persistence.
 
 The production implementation uses server-side environment variables only. No service-role credential is exposed to the browser.
 
-### 7.2 Activity Record
+### 7.2 Authoritative Production Policy Context
+
+In production, the durable store is authoritative for:
+
+- current session/day spend;
+- recent intent IDs / replay evidence;
+- trace head/hash continuity;
+- submitted transaction state.
+
+The existing in-memory recorder may remain useful for tests, but production authorization must **not** derive daily budget or replay state from process memory alone.
+
+If the production durable store is unavailable, state-dependent authorization endpoints **fail closed**: they must not emit a fresh `ALLOW` or executable payload when the server cannot establish authoritative budget/replay state. Read-only status surfaces may degrade gracefully and explicitly report persistence unavailability.
+
+### 7.3 Session and Privacy Model
+
+The browser creates a high-entropy CIRCUIT session token and stores it in local storage so history survives page reloads. The raw token is sent only when querying/evaluating CIRCUIT activity. The backend stores a SHA-256-derived session key rather than the raw token.
+
+Decision history is session-scoped by default. Public/global views expose only:
+
+- aggregate counts/values that do not reveal session tokens;
+- already-public confirmed on-chain transaction data;
+- masked recipient/address summaries where appropriate.
+
+Blocked/review/paused decision detail is never exposed through an unrestricted global history feed.
+
+MCP `list_activity` returns public aggregate/on-chain-safe data by default. Session-specific decision history requires an explicit session token argument and remains bounded.
+
+### 7.4 Activity Record
 
 A persisted activity record contains only data required for control, observability, and public-chain reconciliation:
 
 - `id` / trace ID;
 - timestamp;
-- session identifier or hashed session key;
+- derived session key;
 - connected wallet address when relevant;
 - agent ID when supplied;
 - action kind (`TRANSFER`, `X402`);
@@ -220,7 +251,8 @@ A persisted activity record contains only data required for control, observabili
 - token amount/base units;
 - decision;
 - reason codes;
-- recipient display value or hashed/masked representation for non-chain decisions;
+- masked/hashed recipient representation for non-chain decisions;
+- full recipient only when necessary for a prepared/submitted public-chain action;
 - prepared contract address;
 - transaction hash if submitted;
 - transaction status;
@@ -230,7 +262,24 @@ A persisted activity record contains only data required for control, observabili
 
 No private key, seed phrase, wallet secret, auth token, or exchange credential is stored.
 
-### 7.3 Transaction Lifecycle
+### 7.5 Concurrency-Safe Flight Recorder
+
+The persistent Flight Recorder is a **per-session hash chain**, not one fragile global chain across all Vercel instances.
+
+Appending a decision must be atomic for a session:
+
+1. acquire/serialize against the session's current trace head;
+2. read the authoritative previous hash;
+3. canonicalize the decision record;
+4. compute/store the new hash and event;
+5. update the session trace head;
+6. commit as one database transaction.
+
+The production Supabase/Postgres implementation should expose this through a database RPC/function or equivalent transaction boundary so concurrent authorization requests cannot fork a session's chain.
+
+Global dashboard metrics are derived from immutable activity rows; they do not redefine trace ordering.
+
+### 7.6 Transaction Lifecycle
 
 Activity can move through these states:
 
@@ -246,16 +295,17 @@ or:
 
 The browser reports a transaction hash after `eth_sendTransaction`; the backend records the submission and can reconcile receipt status using the Celo RPC.
 
-### 7.4 Dashboard Queries
+### 7.7 Dashboard Queries
 
 Add API surfaces for:
 
-- recent activity;
+- session-scoped recent activity;
 - activity detail;
-- aggregate metrics;
+- public-safe aggregate metrics;
+- confirmed on-chain transaction history;
 - transaction status reconciliation.
 
-All public analytics endpoints must be rate-limited/safely bounded and must not expose server secrets.
+All analytics endpoints must be safely bounded/rate-limited and must not expose server secrets or unrestricted cross-session decision detail.
 
 ## 8. MCP Server
 
@@ -278,6 +328,7 @@ Returns:
 - execution mode;
 - supported assets;
 - public mandate summary;
+- persistence health;
 - optional wallet/address balance information when an address is explicitly provided.
 
 #### `get_mandate`
@@ -293,6 +344,7 @@ Input:
 - policy value;
 - token/base-unit amount;
 - intent ID;
+- session token/handle;
 - optional agent ID.
 
 Output:
@@ -303,7 +355,7 @@ Output:
 - trace reference.
 
 #### `prepare_payment`
-Produces executable transaction metadata only when policy returns `ALLOW`.
+Produces executable transaction metadata only when policy returns `ALLOW` under authoritative server state.
 
 It must not accept a caller-supplied decision or relaxed mandate.
 
@@ -317,10 +369,10 @@ Reads ERC-8004 identity evidence for a supplied agent ID.
 Reads ERC-8004 reputation summary/evidence for a supplied agent ID.
 
 #### `list_activity`
-Returns a bounded recent activity window. Sensitive/internal-only fields are excluded.
+Returns a bounded public-safe activity window by default; session-scoped decision history requires an explicit valid session token.
 
 #### `verify_trace`
-Verifies the hash-linked Flight Recorder chain or a specified trace relationship.
+Verifies a session Flight Recorder chain or a specified trace relationship.
 
 ### 8.3 MCP Security Boundary
 
@@ -339,8 +391,9 @@ It may not:
 - hold the user's private key;
 - silently sign as the user;
 - allow a caller to replace the server mandate;
-- trust caller-supplied daily-spend/replay context;
-- return executable payloads for non-ALLOW decisions.
+- trust caller-supplied daily-spend/replay totals;
+- return executable payloads for non-ALLOW decisions;
+- bypass persistence when authoritative policy state is unavailable.
 
 ### 8.4 MCP Input Hardening
 
@@ -445,6 +498,8 @@ Existing:
 
 must continue to work unless an explicit migration is documented.
 
+Production `/api/evaluate`, `/api/x402-authorize`, and MCP authorization tools must obtain authoritative budget/replay context from `ActivityStore` rather than in-memory caller context.
+
 ## 14. Code Organization
 
 Targeted new modules:
@@ -479,9 +534,12 @@ Add tests for:
 - account switch;
 - chain switch;
 - EIP-6963 selection;
+- session-token persistence and rotation;
 - activity persistence mapping;
 - aggregate metrics;
 - receipt reconciliation;
+- concurrency-safe trace append contract;
+- production fail-closed behavior when durable state is unavailable;
 - ERC-8021 suffix encoding;
 - reputation parsing;
 - every MCP tool schema;
@@ -495,12 +553,15 @@ Add tests for:
 Add tests that exercise:
 
 - evaluate -> persist -> dashboard query;
+- persistent daily spend surviving fresh process state;
+- persistent replay detection surviving fresh process state;
+- concurrent same-session appends without trace forks;
 - ALLOW -> prepare -> submitted hash -> confirmed receipt;
 - BLOCK/REVIEW/PAUSE -> no executable payload;
 - MCP evaluate -> same policy result as REST;
 - MCP prepare -> same payload as REST for identical intent;
 - identity lookup and reputation lookup;
-- persistent store unavailable -> safe failure/fallback behavior.
+- persistent store unavailable -> authorization fails closed.
 
 ### 15.3 Hostile/Fuzz Tests
 
@@ -511,6 +572,7 @@ Expand randomized testing to include:
 - large payloads;
 - repeated intent IDs;
 - session collision attempts;
+- forged/guessed session tokens;
 - fake attribution tags;
 - attempts to pass custom mandates;
 - prompt injection strings;
@@ -524,6 +586,7 @@ Before declaring production ready:
 
 - concurrent REST authorization requests;
 - concurrent MCP tool calls;
+- same-session parallel requests;
 - mixed dashboard reads + writes;
 - replay bursts;
 - simulated Celo RPC failures/timeouts;
@@ -542,10 +605,10 @@ The UI and MCP responses should distinguish:
 - wrong network;
 - policy denial;
 - invalid input;
-- persistence unavailable;
+- persistence unavailable / authorization fail-closed;
 - Celo RPC unavailable;
 - transaction submitted but receipt pending;
-- onchain revert/failure;
+- on-chain revert/failure;
 - ERC-8004 lookup failure;
 - unsupported MCP protocol/client behavior.
 
@@ -556,12 +619,14 @@ Do not collapse all failures into generic `Unknown error` messages.
 - Never request or store a seed phrase/private key.
 - Never log wallet secrets or exchange credentials.
 - Store only the minimum public/policy metadata required for history and auditability.
-- Mask addresses in dashboard summaries; reveal full public addresses only in explicit detail views.
+- Mask addresses in dashboard summaries; reveal full public addresses only in explicit detail views or where already on-chain.
 - Treat browser/MCP-supplied context as untrusted.
-- Keep server-owned policy and replay/budget evidence authoritative.
+- Keep server-owned policy and durable replay/budget evidence authoritative.
+- Fail closed when authoritative state cannot be established.
 - Rate-limit public write endpoints.
 - Bound history queries and MCP list results.
 - Use server-side secrets only through environment configuration.
+- Never expose unrestricted cross-session blocked/review decision history.
 
 ## 18. Deployment and Compatibility
 
@@ -575,6 +640,8 @@ Requirements:
 - production persistence must survive function restarts/redeployments;
 - `MemoryActivityStore` is test/local only;
 - current public API and `/skill.md` remain reachable.
+
+Production persistence uses Supabase/Postgres through the abstraction above. Schema changes and the atomic append RPC/function are treated as versioned infrastructure and documented in the repo.
 
 ## 19. Hackathon Positioning
 
@@ -598,12 +665,12 @@ This makes CIRCUIT infrastructure that other agents can consume, not just anothe
 Implementation should proceed in this order:
 
 1. wallet modal + disconnect/reconnect;
-2. activity-store abstraction + persistent history;
+2. activity-store abstraction + Supabase schema + atomic trace/policy-state persistence;
 3. dashboard metrics/activity UI;
 4. receipt submission/reconciliation;
 5. MCP `/mcp` endpoint + security tests;
 6. ERC-8004 CIRCUIT identity/reputation surfaces;
-7. ERC-8021 attribution support once real tag is available;
+7. ERC-8021 attribution support once the real tag is available;
 8. improved x402 end-to-end proving flow;
 9. expanded stress/live verification;
 10. documentation/demo/submission refresh.
