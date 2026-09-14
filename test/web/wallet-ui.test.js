@@ -1,13 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-function makeClassList() {
-  const values = new Set();
-  return { add: (...x) => x.forEach((v) => values.add(v)), remove: (...x) => x.forEach((v) => values.delete(v)), toggle: (v, force) => force === false ? values.delete(v) : values.add(v), contains: (v) => values.has(v) };
+function makeClassList(initial = []) {
+  const values = new Set(initial);
+  return {
+    add: (...items) => items.forEach((value) => values.add(value)),
+    remove: (...items) => items.forEach((value) => values.delete(value)),
+    toggle(value, force) {
+      if (force === false) { values.delete(value); return false; }
+      if (force === true) { values.add(value); return true; }
+      if (values.has(value)) { values.delete(value); return false; }
+      values.add(value); return true;
+    },
+    contains: (value) => values.has(value)
+  };
 }
 
 function makeElement() {
   const handlers = {};
+  const attributes = new Map();
   return {
     handlers,
     textContent: '',
@@ -18,7 +29,19 @@ function makeElement() {
     disabled: false,
     classList: makeClassList(),
     addEventListener(type, fn) { handlers[type] = fn; },
+    setAttribute(name, value) { attributes.set(name, String(value)); },
+    getAttribute(name) { return attributes.get(name) ?? null; },
+    focus() {},
     scrollIntoView() {}
+  };
+}
+
+function makeStorage() {
+  const values = new Map();
+  return {
+    getItem(key) { return values.has(key) ? values.get(key) : null; },
+    setItem(key, value) { values.set(key, String(value)); },
+    removeItem(key) { values.delete(key); }
   };
 }
 
@@ -34,10 +57,18 @@ async function loadApp({ ethereum, eip6963 = [] } = {}) {
   get('#usd').value = '5';
   get('#tokenAmount').value = '5';
   get('#agentId').value = '';
+  get('#walletModal').classList.add('hidden');
+  get('#walletReconnectAction').classList.add('hidden');
+  get('#walletDisconnectAction').classList.add('hidden');
+  get('#walletExplorerLink').classList.add('hidden');
+  get('#prepared').classList.add('hidden');
+  get('#executeButton').classList.add('hidden');
+  get('#txLink').classList.add('hidden');
 
   const eventHandlers = new Map();
   globalThis.window = {
     ethereum,
+    localStorage: makeStorage(),
     addEventListener(type, fn) {
       const list = eventHandlers.get(type) || [];
       list.push(fn);
@@ -55,8 +86,10 @@ async function loadApp({ ethereum, eip6963 = [] } = {}) {
         }
       }
       return true;
-    }
+    },
+    open() {}
   };
+  globalThis.navigator = { clipboard: { async writeText() {} } };
   globalThis.document = { querySelector: get };
   globalThis.fetch = async (url) => {
     const payload = String(url).includes('/judge')
@@ -70,20 +103,33 @@ async function loadApp({ ethereum, eip6963 = [] } = {}) {
   return { elements, get };
 }
 
-test('wallet button gives visible recovery state when no injected wallet exists', async () => {
-  const { get } = await loadApp();
-  const button = get('#walletButton');
-  await assert.doesNotReject(async () => button.handlers.click());
-  assert.match(button.textContent, /wallet|install/i);
-  assert.match(get('#walletStatus').textContent, /MetaMask|MiniPay|wallet/i);
-});
-
-test('wallet connection requests accounts and then switches to Celo', async () => {
+test('wallet header button opens an explicit connection panel instead of immediately requesting accounts', async () => {
   const calls = [];
   const provider = {
     async request(payload) {
       calls.push(payload.method);
       if (payload.method === 'eth_accounts') return [];
+      if (payload.method === 'eth_chainId') return '0xa4ec';
+      if (payload.method === 'eth_requestAccounts') return ['0x1234567890123456789012345678901234567890'];
+      return null;
+    },
+    on() {}
+  };
+  const { get } = await loadApp({ ethereum: provider });
+  calls.length = 0;
+
+  await get('#walletButton').handlers.click();
+  assert.equal(get('#walletModal').classList.contains('hidden'), false);
+  assert.equal(calls.includes('eth_requestAccounts'), false);
+});
+
+test('wallet panel connect action requests accounts and switches to Celo', async () => {
+  const calls = [];
+  const provider = {
+    async request(payload) {
+      calls.push(payload.method);
+      if (payload.method === 'eth_accounts') return [];
+      if (payload.method === 'eth_chainId') return '0x1';
       if (payload.method === 'eth_requestAccounts') return ['0x1234567890123456789012345678901234567890'];
       if (payload.method === 'wallet_switchEthereumChain') return null;
       return [];
@@ -92,14 +138,18 @@ test('wallet connection requests accounts and then switches to Celo', async () =
   };
   const { get } = await loadApp({ ethereum: provider });
   await get('#walletButton').handlers.click();
+  await get('#walletConnectAction').handlers.click();
+
   const requestIndex = calls.indexOf('eth_requestAccounts');
   const switchIndex = calls.indexOf('wallet_switchEthereumChain');
   assert.ok(requestIndex >= 0);
   assert.equal(switchIndex, requestIndex + 1);
   assert.match(get('#walletStatus').textContent, /Celo|connected/i);
+  assert.match(get('#walletProviderName').textContent, /wallet|metamask|injected/i);
+  assert.match(get('#walletAddress').textContent, /^0x1234/i);
 });
 
-test('passively discovered account on another chain is not mislabeled as connected on Celo', async () => {
+test('passively discovered account on another chain is not mislabeled as executable on Celo', async () => {
   const provider = {
     async request(payload) {
       if (payload.method === 'eth_accounts') return ['0x1234567890123456789012345678901234567890'];
@@ -113,7 +163,7 @@ test('passively discovered account on another chain is not mislabeled as connect
   assert.doesNotMatch(get('#walletStatus').textContent, /^Connected on Celo/i);
 });
 
-test('EIP-6963 MetaMask wins over a broken legacy window.ethereum provider', async () => {
+test('EIP-6963 MetaMask still wins over a broken legacy window.ethereum provider through the modal', async () => {
   const address = '0x1234567890123456789012345678901234567890';
   const legacy = {
     async request(payload) {
@@ -141,6 +191,36 @@ test('EIP-6963 MetaMask wins over a broken legacy window.ethereum provider', asy
     eip6963: [{ info: { uuid: 'metamask-test', name: 'MetaMask', rdns: 'io.metamask', icon: 'data:image/svg+xml,<svg/>' }, provider: metamask }]
   });
   await get('#walletButton').handlers.click();
+  await get('#walletConnectAction').handlers.click();
   assert.ok(calls.includes('eth_requestAccounts'));
-  assert.match(get('#walletStatus').textContent, /Connected on Celo/i);
+  assert.match(get('#walletStatus').textContent, /Celo|connected/i);
+  assert.equal(get('#walletProviderName').textContent, 'MetaMask');
+});
+
+test('disconnect action clears visible wallet and executable preparation even if wallet permission revocation is unsupported', async () => {
+  const provider = {
+    async request(payload) {
+      if (payload.method === 'eth_accounts') return [];
+      if (payload.method === 'eth_chainId') return '0xa4ec';
+      if (payload.method === 'eth_requestAccounts') return ['0x1234567890123456789012345678901234567890'];
+      if (payload.method === 'wallet_switchEthereumChain') return null;
+      if (payload.method === 'wallet_revokePermissions') throw Object.assign(new Error('unsupported'), { code: -32601 });
+      return null;
+    },
+    on() {}
+  };
+  const { get } = await loadApp({ ethereum: provider });
+  await get('#walletButton').handlers.click();
+  await get('#walletConnectAction').handlers.click();
+
+  get('#prepared').classList.remove('hidden');
+  get('#executeButton').classList.remove('hidden');
+  await get('#walletDisconnectAction').handlers.click();
+
+  assert.match(get('#walletButton').textContent, /connect wallet/i);
+  assert.match(get('#walletStatus').textContent, /disconnected/i);
+  assert.equal(get('#prepared').classList.contains('hidden'), true);
+  assert.equal(get('#executeButton').classList.contains('hidden'), true);
+  assert.match(get('#walletPermissionNote').textContent, /permission|wallet/i);
+  assert.doesNotMatch(get('#walletPermissionNote').textContent, /token approvals? (were|are) revoked/i);
 });
