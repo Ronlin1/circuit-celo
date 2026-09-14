@@ -4,22 +4,42 @@ import { evaluateTreasuryIntent } from './treasury-policy.js';
 import { authorizeAndPrepare } from './execution.js';
 import { JUDGE_MANDATE, runJudgeScenarios } from './judge-scenarios.js';
 import { PUBLIC_MANDATE } from './public-mandate.js';
-import { createTreasuryRecorder } from './trace.js';
+import { createActivityStore } from './activity-store.js';
+import { buildTreasuryTrace, createTreasuryRecorder } from './trace.js';
 
 const recorder = createTreasuryRecorder();
 
-function recorderContext(agentIdentity = null, sessionId = null) {
-  const events = recorder.list();
-  const today = new Date().toISOString().slice(0, 10);
-  const scoped = sessionId ? events.filter((entry) => entry.intent?.sessionId === sessionId) : [];
-  const dailySpendUsd = scoped
-    .filter((entry) => String(entry.timestamp || '').startsWith(today) && entry.decision?.action === 'ALLOW')
-    .reduce((sum, entry) => sum + (Number(entry.intent?.requestedUsd) || 0), 0);
-  const recentIntentIds = scoped
-    .slice(-200)
-    .map((entry) => entry.intent?.intentId)
-    .filter(Boolean);
-  return Object.freeze({ dailySpendUsd, recentIntentIds, agentIdentity });
+function decisionAndPreparation({ intent, context = {}, mandate = PUBLIC_MANDATE, env = process.env }) {
+  const decision = evaluateTreasuryIntent({ mandate, intent, context });
+  let prepared = null;
+  if (decision.action === 'ALLOW' && intent?.amountBaseUnits != null && intent?.recipient) {
+    prepared = authorizeAndPrepare({ decision, intent, config: getConfiguredAssets(env) });
+  }
+  return { decision, prepared };
+}
+
+function activityStatus(decision, prepared) {
+  if (prepared) return 'PREPARED';
+  if (decision.action === 'BLOCK') return 'BLOCKED';
+  if (decision.action === 'REVIEW') return 'REVIEW';
+  if (decision.action === 'PAUSE') return 'PAUSED';
+  return 'EVALUATED';
+}
+
+function authorizationStateError(cause) {
+  const error = new Error('Authorization state unavailable');
+  error.code = 'AUTHORIZATION_STATE_UNAVAILABLE';
+  error.cause = cause;
+  return error;
+}
+
+function duplicateDecision(intent, context, agentIdentity) {
+  const recentIntentIds = Array.from(new Set([...(context?.recentIntentIds || []), intent?.intentId].filter(Boolean)));
+  return decisionAndPreparation({
+    intent,
+    context: { ...context, recentIntentIds, agentIdentity },
+    mandate: PUBLIC_MANDATE
+  });
 }
 
 export function getPublicStatus(env = process.env) {
@@ -40,18 +60,16 @@ export function getPublicStatus(env = process.env) {
       assetUnitCaps: PUBLIC_MANDATE.assetUnitCaps,
       requireAgentIdentity: PUBLIC_MANDATE.requireAgentIdentity
     },
-    stateModel: 'session-scoped server-side replay and budget evidence',
+    stateModel: env.CIRCUIT_ACTIVITY_STORE === 'supabase'
+      ? 'durable session-scoped replay, budget, and trace evidence'
+      : 'session-scoped development replay and budget evidence',
     controlCore: { module: 'circuit-core', revision: 'fed101ed4675dab240c322eb2318e5ce8564fe65' },
     verdictPrecedence: ['PAUSE', 'BLOCK', 'REVIEW', 'RESIZE', 'ALLOW']
   });
 }
 
 export function evaluateTreasuryRequest({ intent, context = {}, mandate = PUBLIC_MANDATE, env = process.env }) {
-  const decision = evaluateTreasuryIntent({ mandate, intent, context });
-  let prepared = null;
-  if (decision.action === 'ALLOW' && intent?.amountBaseUnits != null && intent?.recipient) {
-    prepared = authorizeAndPrepare({ decision, intent, config: getConfiguredAssets(env) });
-  }
+  const { decision, prepared } = decisionAndPreparation({ intent, context, mandate, env });
   const trace = recorder.record({
     traceId: randomUUID(),
     timestamp: new Date().toISOString(),
@@ -62,12 +80,83 @@ export function evaluateTreasuryRequest({ intent, context = {}, mandate = PUBLIC
   return Object.freeze({ decision, prepared, trace: { traceId: trace.traceId, previousHash: trace.previousHash, currentHash: trace.currentHash } });
 }
 
-export function evaluatePublicTreasuryRequest({ intent, agentIdentity = null, env = process.env }) {
-  return evaluateTreasuryRequest({
-    intent,
-    context: recorderContext(agentIdentity, intent?.sessionId || null),
-    mandate: PUBLIC_MANDATE,
-    env
+export async function evaluatePublicTreasuryRequest({ intent, agentIdentity = null, env = process.env, activityStore = null }) {
+  let store;
+  try {
+    store = activityStore || createActivityStore(env);
+  } catch (error) {
+    throw authorizationStateError(error);
+  }
+
+  const sessionId = String(intent?.sessionId || 'public-anonymous');
+  const today = new Date().toISOString().slice(0, 10);
+  let durableContext;
+  try {
+    durableContext = await store.getContext({ sessionId, today });
+  } catch (error) {
+    throw authorizationStateError(error);
+  }
+
+  const context = Object.freeze({
+    dailySpendUsd: Number(durableContext?.dailySpendUsd ?? 0),
+    recentIntentIds: Array.isArray(durableContext?.recentIntentIds) ? durableContext.recentIntentIds : [],
+    agentIdentity
+  });
+
+  const { decision, prepared } = decisionAndPreparation({ intent, context, mandate: PUBLIC_MANDATE, env });
+
+  if (decision.action === 'PAUSE' && decision.reasonCodes.includes('DUPLICATE_INTENT')) {
+    return Object.freeze({ decision, prepared: null, trace: null });
+  }
+
+  const traceId = randomUUID();
+  const timestamp = new Date().toISOString();
+  const trace = buildTreasuryTrace({
+    traceId,
+    timestamp,
+    intent: { ...intent, sessionId, amountBaseUnits: intent?.amountBaseUnits == null ? undefined : String(intent.amountBaseUnits) },
+    decision: { action: decision.action, reasonCodes: decision.reasonCodes },
+    prepared: prepared ? { chainId: prepared.chainId, to: prepared.to, asset: prepared.asset, recipient: prepared.recipient, amountBaseUnits: prepared.amountBaseUnits } : null
+  }, durableContext?.previousHash ?? null);
+
+  const record = {
+    traceId,
+    timestamp,
+    sessionId,
+    intentId: intent?.intentId,
+    walletAddress: null,
+    agentId: agentIdentity?.agentId ?? null,
+    kind: intent?.kind || 'TRANSFER',
+    asset: intent?.asset,
+    requestedUsd: Number(intent?.requestedUsd) || 0,
+    amountBaseUnits: intent?.amountBaseUnits == null ? null : String(intent.amountBaseUnits),
+    decision: decision.action,
+    reasonCodes: decision.reasonCodes,
+    recipient: intent?.recipient ?? null,
+    tokenContract: prepared?.to ?? null,
+    txHash: null,
+    txStatus: activityStatus(decision, prepared),
+    blockNumber: null,
+    previousHash: trace.previousHash,
+    currentHash: trace.currentHash,
+    attributionTag: prepared?.attributionTag ?? null,
+    attributionVersion: prepared?.attributionVersion ?? null
+  };
+
+  try {
+    await store.appendEvaluation(record);
+  } catch (error) {
+    if (error?.message === 'DUPLICATE_INTENT') {
+      const duplicate = duplicateDecision(intent, context, agentIdentity);
+      return Object.freeze({ decision: duplicate.decision, prepared: null, trace: null });
+    }
+    throw authorizationStateError(error);
+  }
+
+  return Object.freeze({
+    decision,
+    prepared,
+    trace: { traceId: trace.traceId, previousHash: trace.previousHash, currentHash: trace.currentHash }
   });
 }
 
