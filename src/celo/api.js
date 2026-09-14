@@ -8,13 +8,14 @@ import { createTreasuryRecorder } from './trace.js';
 
 const recorder = createTreasuryRecorder();
 
-function recorderContext(agentIdentity = null) {
+function recorderContext(agentIdentity = null, sessionId = null) {
   const events = recorder.list();
   const today = new Date().toISOString().slice(0, 10);
-  const dailySpendUsd = events
+  const scoped = sessionId ? events.filter((entry) => entry.intent?.sessionId === sessionId) : [];
+  const dailySpendUsd = scoped
     .filter((entry) => String(entry.timestamp || '').startsWith(today) && entry.decision?.action === 'ALLOW')
     .reduce((sum, entry) => sum + (Number(entry.intent?.requestedUsd) || 0), 0);
-  const recentIntentIds = events
+  const recentIntentIds = scoped
     .slice(-200)
     .map((entry) => entry.intent?.intentId)
     .filter(Boolean);
@@ -39,6 +40,7 @@ export function getPublicStatus(env = process.env) {
       assetUnitCaps: PUBLIC_MANDATE.assetUnitCaps,
       requireAgentIdentity: PUBLIC_MANDATE.requireAgentIdentity
     },
+    stateModel: 'session-scoped server-side replay and budget evidence',
     controlCore: { module: 'circuit-core', revision: 'fed101ed4675dab240c322eb2318e5ce8564fe65' },
     verdictPrecedence: ['PAUSE', 'BLOCK', 'REVIEW', 'RESIZE', 'ALLOW']
   });
@@ -63,7 +65,7 @@ export function evaluateTreasuryRequest({ intent, context = {}, mandate = PUBLIC
 export function evaluatePublicTreasuryRequest({ intent, agentIdentity = null, env = process.env }) {
   return evaluateTreasuryRequest({
     intent,
-    context: recorderContext(agentIdentity),
+    context: recorderContext(agentIdentity, intent?.sessionId || null),
     mandate: PUBLIC_MANDATE,
     env
   });
