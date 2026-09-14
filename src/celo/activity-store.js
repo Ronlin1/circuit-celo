@@ -148,8 +148,8 @@ export function createMemoryActivityStore() {
       });
     },
 
-    async recordSubmitted({ traceId, txHash, walletAddress }) {
-      const item = records.find((entry) => entry.traceId === traceId);
+    async recordSubmitted({ traceId, txHash, walletAddress, sessionId = null }) {
+      const item = records.find((entry) => entry.traceId === traceId && (!sessionId || entry.sessionId === sessionId));
       if (!item) throw new Error('TRACE_NOT_FOUND');
       item.txHash = txHash;
       item.walletAddress = walletAddress;
@@ -157,8 +157,8 @@ export function createMemoryActivityStore() {
       return clone(item);
     },
 
-    async recordStatus({ traceId, txStatus, blockNumber }) {
-      const item = records.find((entry) => entry.traceId === traceId);
+    async recordStatus({ traceId, txStatus, blockNumber, sessionId = null }) {
+      const item = records.find((entry) => entry.traceId === traceId && (!sessionId || entry.sessionId === sessionId));
       if (!item) throw new Error('TRACE_NOT_FOUND');
       item.txStatus = txStatus;
       item.blockNumber = blockNumber ?? null;
@@ -177,8 +177,8 @@ export function createMemoryActivityStore() {
       return clone(metricsFor(records.filter((item) => item.sessionId === sessionId)));
     },
 
-    async getByTraceId(traceId) {
-      return clone(records.find((item) => item.traceId === traceId) || null);
+    async getByTraceId(traceId, { sessionId = null } = {}) {
+      return clone(records.find((item) => item.traceId === traceId && (!sessionId || item.sessionId === sessionId)) || null);
     }
   });
 }
@@ -219,25 +219,25 @@ export function createSupabaseActivityStore(env = process.env, options = {}) {
       return fromDbRow(unwrapData(data));
     },
 
-    async recordSubmitted({ traceId, txHash, walletAddress }) {
-      const { data, error } = await client
+    async recordSubmitted({ traceId, txHash, walletAddress, sessionId = null }) {
+      let query = client
         .from('circuit_activity')
         .update({ tx_hash: txHash, wallet_address: walletAddress, tx_status: 'SUBMITTED' })
-        .eq('trace_id', traceId)
-        .select('*')
-        .single();
+        .eq('trace_id', traceId);
+      if (sessionId) query = query.eq('session_key', hashSessionId(sessionId));
+      const { data, error } = await query.select('*').single();
       throwDbError(error);
       if (!data) throw new Error('TRACE_NOT_FOUND');
       return fromDbRow(data);
     },
 
-    async recordStatus({ traceId, txStatus, blockNumber }) {
-      const { data, error } = await client
+    async recordStatus({ traceId, txStatus, blockNumber, sessionId = null }) {
+      let query = client
         .from('circuit_activity')
         .update({ tx_status: txStatus, block_number: blockNumber ?? null })
-        .eq('trace_id', traceId)
-        .select('*')
-        .single();
+        .eq('trace_id', traceId);
+      if (sessionId) query = query.eq('session_key', hashSessionId(sessionId));
+      const { data, error } = await query.select('*').single();
       throwDbError(error);
       if (!data) throw new Error('TRACE_NOT_FOUND');
       return fromDbRow(data);
@@ -258,12 +258,10 @@ export function createSupabaseActivityStore(env = process.env, options = {}) {
       return metricsFor((data || []).map(fromDbRow));
     },
 
-    async getByTraceId(traceId) {
-      const { data, error } = await client
-        .from('circuit_activity')
-        .select('*')
-        .eq('trace_id', traceId)
-        .maybeSingle();
+    async getByTraceId(traceId, { sessionId = null } = {}) {
+      let query = client.from('circuit_activity').select('*').eq('trace_id', traceId);
+      if (sessionId) query = query.eq('session_key', hashSessionId(sessionId));
+      const { data, error } = await query.maybeSingle();
       throwDbError(error);
       return fromDbRow(data);
     }
