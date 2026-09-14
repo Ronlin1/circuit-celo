@@ -11,6 +11,7 @@ export const JUDGE_MANDATE = Object.freeze({
   maxDailySpendUsd: 100,
   maxX402Usd: 2,
   unknownRecipientReviewUsd: 10,
+  assetUnitCaps: Object.freeze({ USAT: 20, USDC: 20, USDT: 20, USDm: 20, cNGN: 30000 }),
   knownRecipients: Object.freeze([KNOWN]),
   requireAgentIdentity: true
 });
