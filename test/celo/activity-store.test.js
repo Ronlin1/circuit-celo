@@ -36,6 +36,33 @@ function record(overrides = {}) {
   };
 }
 
+function dbRow(overrides = {}) {
+  return {
+    trace_id: 'trace-1',
+    created_at: `${day}T09:00:00.000Z`,
+    session_key: 'hashed-session',
+    intent_id: 'intent-1',
+    wallet_address: null,
+    agent_id: null,
+    action_kind: 'TRANSFER',
+    asset: 'USDC',
+    requested_usd: 5,
+    amount_base_units: '5000000',
+    decision: 'ALLOW',
+    reason_codes: [],
+    recipient: '0x1111111111111111111111111111111111111111',
+    token_contract: '0x2222222222222222222222222222222222222222',
+    tx_hash: null,
+    tx_status: 'PREPARED',
+    block_number: null,
+    previous_trace_hash: null,
+    current_trace_hash: 'hash-1',
+    attribution_tag: null,
+    attribution_version: null,
+    ...overrides
+  };
+}
+
 test('context counts only ALLOW spend and scopes recent intent IDs by session', async () => {
   const store = createMemoryActivityStore();
   await store.appendEvaluation(record());
@@ -114,4 +141,62 @@ test('activity store factory defaults to memory but does not silently downgrade 
     () => createActivityStore({ CIRCUIT_ACTIVITY_STORE: 'supabase' }),
     /SUPABASE_URL is required/
   );
+});
+
+test('Supabase store appends through atomic RPC, hashes raw session ids, and maps the row back', async () => {
+  const calls = [];
+  const client = {
+    async rpc(name, args) {
+      calls.push({ name, args });
+      return { data: dbRow(), error: null };
+    }
+  };
+  const store = createSupabaseActivityStore(
+    { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'secret' },
+    { client }
+  );
+
+  const saved = await store.appendEvaluation(record());
+  assert.equal(saved.traceId, 'trace-1');
+  assert.equal(saved.intentId, 'intent-1');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, 'append_circuit_activity');
+  assert.notEqual(calls[0].args.p_record.session_key, 'session-a');
+  assert.match(calls[0].args.p_record.session_key, /^[a-f0-9]{64}$/);
+  assert.equal(calls[0].args.p_record.intent_id, 'intent-1');
+});
+
+test('Supabase store derives replay and budget context from durable newest-first rows', async () => {
+  const newest = dbRow({
+    trace_id: 'trace-2',
+    created_at: `${day}T10:00:00.000Z`,
+    intent_id: 'intent-2',
+    requested_usd: 50,
+    decision: 'BLOCK',
+    current_trace_hash: 'hash-2'
+  });
+  const older = dbRow();
+  const client = {
+    from(table) {
+      assert.equal(table, 'circuit_activity');
+      return {
+        select() { return this; },
+        eq() { return this; },
+        order() { return this; },
+        limit(limit) {
+          assert.equal(limit, 200);
+          return Promise.resolve({ data: [newest, older], error: null });
+        }
+      };
+    }
+  };
+  const store = createSupabaseActivityStore(
+    { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'secret' },
+    { client }
+  );
+
+  const context = await store.getContext({ sessionId: 'session-a', today: day });
+  assert.equal(context.dailySpendUsd, 5);
+  assert.deepEqual(context.recentIntentIds, ['intent-1', 'intent-2']);
+  assert.equal(context.previousHash, 'hash-2');
 });
