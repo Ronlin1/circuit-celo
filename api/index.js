@@ -5,6 +5,9 @@ import { CELO_MAINNET } from '../src/celo/config.js';
 function runtimeEnv() {
   return {
     CIRCUIT_EXECUTION_MODE: process.env.CIRCUIT_EXECUTION_MODE || 'PREPARE',
+    CIRCUIT_ACTIVITY_STORE: process.env.CIRCUIT_ACTIVITY_STORE || 'memory',
+    SUPABASE_URL: process.env.SUPABASE_URL || undefined,
+    SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || undefined,
     CELO_RPC_URL: process.env.CELO_RPC_URL || CELO_MAINNET.rpcUrl,
     USAT_TOKEN_ADDRESS: process.env.USAT_TOKEN_ADDRESS || undefined,
     CNGN_TOKEN_ADDRESS: process.env.CNGN_TOKEN_ADDRESS || undefined,
@@ -59,11 +62,18 @@ export default async function handler(request, response) {
       const input = parsedBody(request);
       const intent = route === 'x402-authorize' ? { ...(input.intent || {}), kind: 'X402' } : input.intent;
       const agentIdentity = input.agentId != null && input.agentId !== '' ? await lookupIdentity(String(input.agentId), env) : null;
-      return response.status(200).json(evaluatePublicTreasuryRequest({ intent, agentIdentity, env }));
+      const result = await evaluatePublicTreasuryRequest({ intent, agentIdentity, env });
+      return response.status(200).json(result);
     }
 
     return response.status(404).json({ error: 'Not found', routes: ['GET /api/status','GET /api/judge','GET /api/traces','POST /api/identity','POST /api/evaluate','POST /api/x402-authorize'] });
   } catch (error) {
+    if (error?.code === 'AUTHORIZATION_STATE_UNAVAILABLE') {
+      return response.status(503).json({
+        error: 'Authorization state unavailable',
+        code: 'AUTHORIZATION_STATE_UNAVAILABLE'
+      });
+    }
     return response.status(400).json({ error: error?.message || 'Unexpected CIRCUIT error' });
   }
 }
