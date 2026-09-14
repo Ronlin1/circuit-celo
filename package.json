@@ -1,0 +1,22 @@
+{
+  "name": "circuit-celo",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.16.0" },
+  "scripts": {
+    "test": "node --test",
+    "check:syntax": "node scripts/verify-syntax.js",
+    "scenario:verify": "node scripts/verify-scenarios.js",
+    "secret:scan": "node scripts/secret-scan.js",
+    "verify": "npm test && npm run check:syntax && npm run secret:scan && npm run scenario:verify"
+  },
+  "description": "CIRCUIT Treasury — runtime authorization for autonomous finance on Celo.",
+  "license": "MIT",
+  "author": "Ronald Atuhaire",
+  "repository": { "type": "git", "url": "https://github.com/Ronlin1/circuit-celo.git" },
+  "keywords": ["celo","x402","erc-8004","ai-agents","stablecoins","runtime-authorization","agentic-finance"],
+  "dependencies": {
+    "circuit-core": "git+https://github.com/Ronlin1/circuit.git#fed101ed4675dab240c322eb2318e5ce8564fe65"
+  }
+}
