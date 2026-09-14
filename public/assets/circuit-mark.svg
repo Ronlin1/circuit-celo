@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
+  <title id="title">CIRCUIT mark</title><desc id="desc">Black square with yellow concentric circuit rings and a white center.</desc>
+  <rect width="160" height="160" rx="34" fill="#070707"/><circle cx="80" cy="80" r="55" fill="none" stroke="#2a2a2a" stroke-width="10"/>
+  <circle cx="80" cy="80" r="38" fill="none" stroke="#f0b90b" stroke-width="10" stroke-dasharray="82 24" transform="rotate(-28 80 80)"/><circle cx="80" cy="80" r="19" fill="#f0b90b"/><circle cx="80" cy="80" r="8" fill="#fff"/><path d="M80 18v20M80 122v20M18 80h20M122 80h20" stroke="#f0b90b" stroke-width="8" stroke-linecap="round"/>
+</svg>
