@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createMemoryActivityStore } from '../../src/celo/activity-store.js';
+import {
+  createActivityStore,
+  createMemoryActivityStore,
+  createSupabaseActivityStore
+} from '../../src/celo/activity-store.js';
 
 const day = '2026-09-14';
 
@@ -91,4 +95,23 @@ test('list is newest-first, session scoped, and clamps limits to 200', async () 
   const items = await store.list({ sessionId: 'session-a', limit: 999 });
   assert.equal(items.length, 200);
   assert.ok(items.every((item) => item.sessionId === 'session-a'));
+});
+
+test('production store configuration fails early when Supabase credentials are missing', () => {
+  assert.throws(
+    () => createSupabaseActivityStore({ SUPABASE_SERVICE_ROLE_KEY: 'secret' }),
+    /SUPABASE_URL is required/
+  );
+  assert.throws(
+    () => createSupabaseActivityStore({ SUPABASE_URL: 'https://example.supabase.co' }),
+    /SUPABASE_SERVICE_ROLE_KEY is required/
+  );
+});
+
+test('activity store factory defaults to memory but does not silently downgrade explicit Supabase mode', () => {
+  assert.doesNotThrow(() => createActivityStore({}));
+  assert.throws(
+    () => createActivityStore({ CIRCUIT_ACTIVITY_STORE: 'supabase' }),
+    /SUPABASE_URL is required/
+  );
 });
