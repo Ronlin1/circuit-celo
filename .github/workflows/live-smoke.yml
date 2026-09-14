@@ -1,0 +1,25 @@
+name: CIRCUIT Live Production Stress
+
+on:
+  push:
+    paths:
+      - 'scripts/live-smoke.js'
+      - '.github/workflows/live-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+      - name: Attack production boundary
+        env:
+          CIRCUIT_LIVE_URL: https://circuit-celo.vercel.app
+        run: node scripts/live-smoke.js
