@@ -15,6 +15,7 @@ function makeElement() {
     value: '',
     href: '',
     className: '',
+    disabled: false,
     classList: makeClassList(),
     addEventListener(type, fn) { handlers[type] = fn; },
     scrollIntoView() {}
@@ -36,13 +37,12 @@ async function loadApp({ ethereum } = {}) {
 
   globalThis.window = { ethereum };
   globalThis.document = { querySelector: get };
-  globalThis.fetch = async (url) => ({
-    ok: true,
-    async json() {
-      if (String(url).includes('/judge')) return { total: 8, passed: 8, results: [] };
-      return { network: { name: 'Celo Mainnet' }, executionMode: 'PREPARE' };
-    }
-  });
+  globalThis.fetch = async (url) => {
+    const payload = String(url).includes('/judge')
+      ? { total: 8, passed: 8, results: [] }
+      : { network: { name: 'Celo Mainnet' }, executionMode: 'PREPARE' };
+    return { ok: true, status: 200, async text() { return JSON.stringify(payload); } };
+  };
 
   await import(`../../public/app.js?wallet-test=${Date.now()}-${Math.random()}`);
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -57,20 +57,23 @@ test('wallet button gives visible recovery state when no injected wallet exists'
   assert.match(get('#walletStatus').textContent, /MetaMask|MiniPay|wallet/i);
 });
 
-test('wallet connection requests accounts and switches to Celo immediately', async () => {
+test('wallet connection requests accounts and then switches to Celo', async () => {
   const calls = [];
   const provider = {
     async request(payload) {
       calls.push(payload.method);
+      if (payload.method === 'eth_accounts') return [];
       if (payload.method === 'eth_requestAccounts') return ['0x1234567890123456789012345678901234567890'];
       if (payload.method === 'wallet_switchEthereumChain') return null;
-      if (payload.method === 'eth_chainId') return '0xa4ec';
       return [];
     },
     on() {}
   };
   const { get } = await loadApp({ ethereum: provider });
   await get('#walletButton').handlers.click();
-  assert.deepEqual(calls.slice(0, 2), ['eth_requestAccounts', 'wallet_switchEthereumChain']);
+  const requestIndex = calls.indexOf('eth_requestAccounts');
+  const switchIndex = calls.indexOf('wallet_switchEthereumChain');
+  assert.ok(requestIndex >= 0);
+  assert.equal(switchIndex, requestIndex + 1);
   assert.match(get('#walletStatus').textContent, /Celo|connected/i);
 });
