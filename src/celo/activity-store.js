@@ -107,8 +107,10 @@ export function createMemoryActivityStore() {
   });
 }
 
-export function createSupabaseActivityStore() {
-  throw new Error('Supabase activity store is not configured yet');
+export function createSupabaseActivityStore(env = process.env) {
+  if (!env.SUPABASE_URL) throw new Error('SUPABASE_URL is required for Supabase activity store');
+  if (!env.SUPABASE_SERVICE_ROLE_KEY) throw new Error('SUPABASE_SERVICE_ROLE_KEY is required for Supabase activity store');
+  throw new Error('Supabase activity store implementation is not initialized');
 }
 
 export function createActivityStore(env = process.env) {
