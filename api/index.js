@@ -20,10 +20,20 @@ function runtimeEnv() {
   };
 }
 
+function authorizationStateError(cause) {
+  const error = new Error('Authorization state unavailable');
+  error.code = 'AUTHORIZATION_STATE_UNAVAILABLE';
+  error.cause = cause;
+  return error;
+}
+
 function activityStoreFor(env) {
-  return env.CIRCUIT_ACTIVITY_STORE === 'supabase'
-    ? createActivityStore(env)
-    : developmentMemoryStore;
+  if (env.CIRCUIT_ACTIVITY_STORE !== 'supabase') return developmentMemoryStore;
+  try {
+    return createActivityStore(env);
+  } catch (error) {
+    throw authorizationStateError(error);
+  }
 }
 
 function routeOf(request) {
