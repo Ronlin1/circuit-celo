@@ -4,10 +4,12 @@ const CELO_CHAIN_HEX = '0xa4ec';
 const sessionId = crypto.randomUUID();
 let account = null;
 let walletProvider = null;
+let walletProviderInfo = null;
 let lastPrepared = null;
 let lastDecision = null;
 let walletListenersBound = false;
 const decimals = { USAT: 6, cNGN: 6, USDC: 6, USDT: 6, USDm: 18 };
+const announcedProviders = [];
 
 function baseUnits(value, places) {
   const raw = String(value).trim();
@@ -33,7 +35,23 @@ function setWalletStatus(message, tone = '') {
   node.className = `wallet-status ${tone}`.trim();
 }
 
-function injectedProviders() {
+function registerAnnouncedProvider(event) {
+  const detail = event?.detail;
+  if (!detail?.provider?.request) return;
+  const uuid = detail?.info?.uuid;
+  if (announcedProviders.some((entry) => (uuid && entry.info?.uuid === uuid) || entry.provider === detail.provider)) return;
+  announcedProviders.push({ info: detail.info || {}, provider: detail.provider });
+}
+
+function requestWalletAnnouncements() {
+  if (!window?.addEventListener || !window?.dispatchEvent) return;
+  window.addEventListener('eip6963:announceProvider', registerAnnouncedProvider);
+  try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch {}
+}
+
+requestWalletAnnouncements();
+
+function legacyProviders() {
   const ethereum = window?.ethereum;
   if (!ethereum) return [];
   if (Array.isArray(ethereum.providers) && ethereum.providers.length) return ethereum.providers;
@@ -41,8 +59,31 @@ function injectedProviders() {
 }
 
 function chooseProvider() {
-  const providers = injectedProviders();
-  return providers.find((p) => p?.isMiniPay) || providers.find((p) => p?.isMetaMask) || providers[0] || null;
+  const metamaskAnnouncement = announcedProviders.find(({ info, provider }) =>
+    info?.rdns === 'io.metamask' || /metamask/i.test(info?.name || '') || provider?.isMetaMask
+  );
+  if (metamaskAnnouncement) {
+    walletProviderInfo = metamaskAnnouncement.info;
+    return metamaskAnnouncement.provider;
+  }
+
+  const miniPayAnnouncement = announcedProviders.find(({ info, provider }) =>
+    /minipay/i.test(info?.name || '') || /minipay/i.test(info?.rdns || '') || provider?.isMiniPay
+  );
+  if (miniPayAnnouncement) {
+    walletProviderInfo = miniPayAnnouncement.info;
+    return miniPayAnnouncement.provider;
+  }
+
+  if (announcedProviders[0]) {
+    walletProviderInfo = announcedProviders[0].info;
+    return announcedProviders[0].provider;
+  }
+
+  const providers = legacyProviders();
+  const legacy = providers.find((p) => p?.isMetaMask) || providers.find((p) => p?.isMiniPay) || providers[0] || null;
+  walletProviderInfo = legacy ? { name: legacy.isMetaMask ? 'MetaMask' : legacy.isMiniPay ? 'MiniPay' : 'Injected wallet', rdns: 'legacy' } : null;
+  return legacy;
 }
 
 async function chainIdOf(provider) {
@@ -54,16 +95,17 @@ function displayAccount(address, celoState = null) {
   account = address || null;
   const button = $('#walletButton');
   if (!button) return;
+  const walletName = walletProviderInfo?.name || 'Wallet';
   if (account) {
     button.textContent = `${account.slice(0, 6)}…${account.slice(-4)}`;
     button.classList.add('connected');
-    if (celoState === true) setWalletStatus('Connected on Celo · wallet remains the signer', 'ok');
-    else if (celoState === false) setWalletStatus('Wallet connected · switch to Celo before execution', 'warn');
-    else setWalletStatus('Wallet connected · checking network…');
+    if (celoState === true) setWalletStatus(`${walletName} connected on Celo · wallet remains the signer`, 'ok');
+    else if (celoState === false) setWalletStatus(`${walletName} connected · switch to Celo before execution`, 'warn');
+    else setWalletStatus(`${walletName} connected · checking network…`);
   } else {
     button.textContent = 'Connect wallet';
     button.classList.remove('connected');
-    setWalletStatus('Wallet detected · connect to authorize mainnet execution');
+    setWalletStatus(`${walletName} detected · connect to authorize mainnet execution`);
   }
 }
 
@@ -112,8 +154,21 @@ function bindWalletEvents(provider) {
   });
 }
 
+async function requestAccounts(provider) {
+  try {
+    return await provider.request({ method: 'eth_requestAccounts' });
+  } catch (error) {
+    if (/Unable to find any account for 60/i.test(error?.message || '')) {
+      const existing = await provider.request({ method: 'eth_accounts' }).catch(() => []);
+      if (existing?.[0]) return existing;
+    }
+    throw error;
+  }
+}
+
 async function connectWallet() {
   const button = $('#walletButton');
+  requestWalletAnnouncements();
   const provider = chooseProvider();
   if (!provider) {
     if (button) button.textContent = 'Install wallet';
@@ -123,11 +178,11 @@ async function connectWallet() {
 
   walletProvider = provider;
   if (button) { button.disabled = true; button.textContent = 'Connecting…'; }
-  setWalletStatus('Requesting wallet access…');
+  setWalletStatus(`Requesting ${walletProviderInfo?.name || 'wallet'} access…`);
 
   try {
-    const accounts = await provider.request({ method: 'eth_requestAccounts' });
-    if (!accounts?.[0]) throw new Error('Wallet returned no account.');
+    const accounts = await requestAccounts(provider);
+    if (!accounts?.[0]) throw new Error('Wallet returned no EVM account.');
     await ensureCelo(provider);
     bindWalletEvents(provider);
     displayAccount(accounts[0], true);
@@ -135,7 +190,11 @@ async function connectWallet() {
   } catch (error) {
     const rejected = error?.code === 4001;
     displayAccount(null);
-    setWalletStatus(rejected ? 'Connection cancelled in your wallet.' : `Wallet connection failed · ${error?.message || 'Unknown wallet error'}`, 'warn');
+    const message = error?.message || 'Unknown wallet error';
+    const hint = /Unable to find any account for 60/i.test(message)
+      ? ' MetaMask did not expose an Ethereum/EVM account to this dapp. Re-open MetaMask, select an account with a 0x address, then reconnect.'
+      : '';
+    setWalletStatus(rejected ? 'Connection cancelled in your wallet.' : `Wallet connection failed · ${message}.${hint}`, 'warn');
     return null;
   } finally {
     if (button) button.disabled = false;
@@ -143,6 +202,7 @@ async function connectWallet() {
 }
 
 async function initializeWallet() {
+  requestWalletAnnouncements();
   const provider = chooseProvider();
   if (!provider) {
     setWalletStatus('No wallet connected · Treasury Lab still works in prepare mode');
@@ -156,10 +216,10 @@ async function initializeWallet() {
       const chainId = await chainIdOf(provider);
       displayAccount(accounts[0], chainId === CELO_CHAIN_HEX);
     } else {
-      setWalletStatus('Wallet detected · click Connect wallet to enable execution');
+      setWalletStatus(`${walletProviderInfo?.name || 'Wallet'} detected · click Connect wallet to enable execution`);
     }
   } catch {
-    setWalletStatus('Wallet detected · click Connect wallet to enable execution');
+    setWalletStatus(`${walletProviderInfo?.name || 'Wallet'} detected · click Connect wallet to enable execution`);
   }
 }
 
