@@ -11,9 +11,9 @@ CIRCUIT Treasury is a deterministic control layer for autonomous finance on Celo
 
 ## Discover
 
-- `GET /api/status` — Celo network, token, ERC-8004 and x402 configuration.
+- `GET /api/status` — network, stablecoin, ERC-8004, x402 and active public-mandate metadata.
 - `GET /api/judge` — eight deterministic adversarial scenarios with expected vs actual verdicts.
-- `GET /api/traces` — hash-linked Flight Recorder health and decisions recorded by the current function instance.
+- `GET /api/traces` — hash-linked Flight Recorder health for the current function instance.
 
 ## Verify an ERC-8004 identity
 
@@ -23,9 +23,9 @@ CIRCUIT Treasury is a deterministic control layer for autonomous finance on Celo
 {"agentId":"42"}
 ```
 
-CIRCUIT queries the ERC-8004 Identity Registry on Celo mainnet with `ownerOf(agentId)` and returns registration evidence.
+CIRCUIT queries the ERC-8004 Identity Registry on Celo mainnet with `ownerOf(agentId)` and returns live registration evidence. Identity is optional in the public Treasury Lab; when supplied, evidence is derived by the server and is never trusted from caller-provided context.
 
-## Authorize a transfer
+## Authorize a stablecoin transfer
 
 `POST /api/evaluate`
 
@@ -39,19 +39,23 @@ CIRCUIT queries the ERC-8004 Identity Registry on Celo mainnet with `ownerOf(age
     "recipient":"0x1111111111111111111111111111111111111111",
     "requestedUsd":5,
     "amountBaseUnits":"5000000",
-    "intentId":"unique-semantic-intent-id"
-  },
-  "context":{"dailySpendUsd":0,"recentIntentIds":[]}
+    "intentId":"unique-semantic-intent-id",
+    "sessionId":"client-session-id"
+  }
 }
 ```
 
-Only an `ALLOW` response can include a prepared ERC-20 transaction payload. `BLOCK`, `PAUSE`, and `REVIEW` never produce an executable payload.
+`agentId` is optional. `sessionId` is recommended so replay and session-day budget evidence can be scoped to the caller. The public API owns the active mandate and runtime context: caller-provided `mandate`, `dailySpendUsd`, `recentIntentIds`, or identity claims are not policy authority.
+
+For USD-par stablecoins, the encoded token amount must match the declared policy value within a narrow tolerance. Asset-specific unit caps provide a second bound for other supported assets such as cNGN.
+
+Only an `ALLOW` response can include prepared ERC-20 calldata. `BLOCK`, `PAUSE`, and `REVIEW` never produce an executable payload.
 
 ## Guard an x402 purchase
 
-`POST /api/x402-authorize` with the same structure. CIRCUIT forces `kind: X402` and evaluates the resource price against the mandate's x402 ceiling before the client creates a payment signature.
+`POST /api/x402-authorize` with the same intent structure. CIRCUIT forces `kind: X402` and evaluates the resource price against the active mandate before a payment signature can be created.
 
-The default public demo mandate caps x402 purchases at **$2**. CIRCUIT does not replace the x402 facilitator; it is the authorization layer immediately before signing/settlement. The Celo facilitator endpoint is discoverable through `/api/status` and configurable with `X402_FACILITATOR_URL`.
+The public mandate caps x402 purchases at **$2**. CIRCUIT does not replace the x402 facilitator; it is the authorization layer immediately before signing/settlement. The Celo facilitator endpoint is discoverable through `/api/status`.
 
 ## Verdict precedence
 
@@ -69,4 +73,4 @@ An AI-generated explanation can never downgrade a stronger deterministic verdict
 
 ## Safety boundary
 
-Never treat `ALLOW` as a private-key delegation. The public implementation prepares calldata and lets the user's wallet remain the signer. Never bypass CIRCUIT by signing first and asking for approval later.
+Never treat `ALLOW` as private-key delegation. The public implementation prepares calldata and lets the user's wallet remain the signer. Never sign first and ask CIRCUIT for authorization afterward.
