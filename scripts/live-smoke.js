@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 const BASE = process.env.CIRCUIT_LIVE_URL || 'https://circuit-celo.vercel.app';
 const KNOWN = '0x1111111111111111111111111111111111111111';
+const RUN = crypto.randomUUID();
 
 async function get(path) {
   const res = await fetch(`${BASE}${path}`, { headers: { 'user-agent': 'circuit-live-smoke/1.0' } });
@@ -21,7 +22,7 @@ async function post(path, body) {
   return JSON.parse(text);
 }
 
-function intent({ usd = 5, token = 5, asset = 'USAT', recipient = KNOWN, id = crypto.randomUUID(), session = crypto.randomUUID(), kind = 'TRANSFER', extra = {} } = {}) {
+function intent({ usd = 5, token = 5, asset = 'USAT', recipient = KNOWN, id = `${RUN}-${crypto.randomUUID()}`, session = `${RUN}-${crypto.randomUUID()}`, kind = 'TRANSFER', extra = {} } = {}) {
   const decimals = asset === 'USDm' ? 18 : 6;
   return {
     chainId: 42220,
@@ -88,7 +89,7 @@ assert.equal(x402High.prepared, null);
 
 const spoofContext = await post('/api/evaluate', {
   context: { dailySpendUsd: 999999, recentIntentIds: ['spoof-me'], agentIdentity: { registered: false } },
-  intent: intent({ usd: 1, token: 1, id: 'spoof-me' })
+  intent: intent({ usd: 1, token: 1, id: `${RUN}-spoof-me`, session: `${RUN}-spoof-session` })
 });
 assert.equal(spoofContext.decision.action, 'ALLOW');
 
@@ -96,14 +97,15 @@ const statusBurst = await Promise.all(Array.from({ length: 40 }, () => get('/api
 assert.equal(statusBurst.length, 40);
 assert.ok(statusBurst.every((x) => x.network.chainId === 42220));
 
-const safeBurst = await Promise.all(Array.from({ length: 40 }, (_, i) => post('/api/evaluate', { intent: intent({ usd: 1, token: 1, id: `safe-burst-${i}`, session: `safe-burst-session-${i}` }) })));
+const safeBurst = await Promise.all(Array.from({ length: 40 }, (_, i) => post('/api/evaluate', { intent: intent({ usd: 1, token: 1, id: `${RUN}-safe-burst-${i}`, session: `${RUN}-safe-burst-session-${i}` }) })));
 assert.ok(safeBurst.every((x) => x.decision.action === 'ALLOW' && x.prepared));
 
-const blockBurst = await Promise.all(Array.from({ length: 40 }, (_, i) => post('/api/evaluate', { intent: intent({ usd: 30, token: 30, id: `block-burst-${i}`, session: `block-burst-session-${i}` }) })));
+const blockBurst = await Promise.all(Array.from({ length: 40 }, (_, i) => post('/api/evaluate', { intent: intent({ usd: 30, token: 30, id: `${RUN}-block-burst-${i}`, session: `${RUN}-block-burst-session-${i}` }) })));
 assert.ok(blockBurst.every((x) => x.decision.action === 'BLOCK' && x.prepared === null));
 
 console.log(JSON.stringify({
   target: BASE,
+  run: RUN,
   assertions: 'passed',
   judge: `${judge.passed}/${judge.total}`,
   identityProbe: { standard: identity.standard, registered: identity.registered },
