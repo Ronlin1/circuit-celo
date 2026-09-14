@@ -45,9 +45,18 @@ const judge = await get('/api/judge');
 assert.equal(judge.passed, 8);
 assert.equal(judge.total, 8);
 
+const identity = await post('/api/identity', { agentId: '42' });
+assert.equal(identity.standard, 'ERC-8004');
+assert.equal(identity.agentId, '42');
+assert.equal(typeof identity.registered, 'boolean');
+
 const safe = await post('/api/evaluate', { intent: intent() });
 assert.equal(safe.decision.action, 'ALLOW');
 assert.ok(safe.prepared?.data?.startsWith('0xa9059cbb'));
+
+const x402Safe = await post('/api/x402-authorize', { intent: intent({ usd: 0.1, token: 0.1, kind: 'X402' }) });
+assert.equal(x402Safe.decision.action, 'ALLOW');
+assert.ok(x402Safe.prepared?.data?.startsWith('0xa9059cbb'));
 
 const oversize = await post('/api/evaluate', { intent: intent({ usd: 50, token: 50 }) });
 assert.equal(oversize.decision.action, 'BLOCK');
@@ -97,6 +106,8 @@ console.log(JSON.stringify({
   target: BASE,
   assertions: 'passed',
   judge: `${judge.passed}/${judge.total}`,
+  identityProbe: { standard: identity.standard, registered: identity.registered },
+  x402Safe: x402Safe.decision.action,
   concurrentRequests: 120,
   securityCases: ['forged-mandate', 'value-mismatch', 'invalid-recipient', 'x402-cap', 'spoofed-context'],
   safePrepared: Boolean(safe.prepared)
