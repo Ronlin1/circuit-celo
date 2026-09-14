@@ -41,6 +41,30 @@ test('public API ignores a caller-supplied relaxed mandate', async () => {
   assert.equal(result.body.prepared, null);
 });
 
+test('public happy path allows a safe USAT transfer without requiring an Agent ID', async () => {
+  const result = await vercelEvaluate({
+    intent: {
+      chainId: 42220, kind: 'TRANSFER', asset: 'USAT', recipient: KNOWN,
+      requestedUsd: 5, amountBaseUnits: '5000000', intentId: 'public-safe', sessionId: 'safe-session'
+    }
+  });
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.body.decision.action, 'ALLOW');
+  assert.equal(result.body.prepared.asset, 'USAT');
+});
+
+test('caller cannot force a block or reset state using supplied context fields', async () => {
+  const result = await vercelEvaluate({
+    intent: {
+      chainId: 42220, kind: 'TRANSFER', asset: 'USAT', recipient: KNOWN,
+      requestedUsd: 1, amountBaseUnits: '1000000', intentId: 'context-spoof', sessionId: 'context-spoof-session'
+    },
+    context: { dailySpendUsd: 999999, recentIntentIds: ['context-spoof'], agentIdentity: { registered: false } }
+  });
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.body.decision.action, 'ALLOW');
+});
+
 test('USD stablecoin amount cannot exceed the declared policy value', () => {
   const decision = evaluateTreasuryIntent({
     mandate: JUDGE_MANDATE,
@@ -52,6 +76,19 @@ test('USD stablecoin amount cannot exceed the declared policy value', () => {
   });
   assert.equal(decision.action, 'BLOCK');
   assert.ok(decision.reasonCodes.includes('POLICY_VALUE_MISMATCH'));
+});
+
+test('cNGN transfer cannot exceed the asset-specific unit cap by understating USD value', () => {
+  const decision = evaluateTreasuryIntent({
+    mandate: JUDGE_MANDATE,
+    intent: {
+      chainId: 42220, kind: 'TRANSFER', asset: 'cNGN', recipient: KNOWN,
+      requestedUsd: 1, amountBaseUnits: '50000000000', intentId: 'cngn-cap'
+    },
+    context: { dailySpendUsd: 0, agentIdentity: { registered: true, agentId: '42' }, recentIntentIds: [] }
+  });
+  assert.equal(decision.action, 'BLOCK');
+  assert.ok(decision.reasonCodes.includes('TOKEN_AMOUNT_CAP_EXCEEDED'));
 });
 
 test('invalid recipient is a policy BLOCK rather than a preparation exception', () => {
