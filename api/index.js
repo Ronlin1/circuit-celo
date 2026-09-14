@@ -1,4 +1,4 @@
-import { getPublicStatus, evaluateTreasuryRequest, getJudgeResults, getTraceHealth } from '../src/celo/api.js';
+import { getPublicStatus, evaluatePublicTreasuryRequest, getJudgeResults, getTraceHealth } from '../src/celo/api.js';
 import { buildIdentityRpcRequest, identityEvidenceFromRpc } from '../src/celo/agent-trust.js';
 import { CELO_MAINNET } from '../src/celo/config.js';
 
@@ -57,10 +57,9 @@ export default async function handler(request, response) {
 
     if (request.method === 'POST' && (route === 'evaluate' || route === 'x402-authorize')) {
       const input = parsedBody(request);
-      const context = { ...(input.context || {}) };
-      if (!context.agentIdentity && input.agentId != null && input.agentId !== '') context.agentIdentity = await lookupIdentity(String(input.agentId), env);
       const intent = route === 'x402-authorize' ? { ...(input.intent || {}), kind: 'X402' } : input.intent;
-      return response.status(200).json(evaluateTreasuryRequest({ ...input, intent, context, env }));
+      const agentIdentity = input.agentId != null && input.agentId !== '' ? await lookupIdentity(String(input.agentId), env) : null;
+      return response.status(200).json(evaluatePublicTreasuryRequest({ intent, agentIdentity, env }));
     }
 
     return response.status(404).json({ error: 'Not found', routes: ['GET /api/status','GET /api/judge','GET /api/traces','POST /api/identity','POST /api/evaluate','POST /api/x402-authorize'] });
