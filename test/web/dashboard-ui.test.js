@@ -38,7 +38,7 @@ test('dashboard loads real session-scoped metrics and activity without sample da
       });
     }
     if (String(url).startsWith('/api/activity')) {
-      return jsonResponse([
+      return jsonResponse({ items: [
         {
           traceId: 'trace-1', timestamp: '2026-09-18T05:00:00.000Z', intentId: 'intent-1',
           kind: 'TRANSFER', asset: 'USDC', requestedUsd: 5, decision: 'ALLOW', reasonCodes: [],
@@ -46,7 +46,7 @@ test('dashboard loads real session-scoped metrics and activity without sample da
           txHash: `0x${'a'.repeat(64)}`, txStatus: 'CONFIRMED', blockNumber: 123,
           previousHash: null, currentHash: 'hash-1'
         }
-      ]);
+      ] });
     }
     throw new Error(`unexpected URL ${url}`);
   };
