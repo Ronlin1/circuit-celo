@@ -1,5 +1,7 @@
 import { createWalletController } from './js/wallet.js';
 import { shortAddress, walletChainLabel, walletStatusView } from './js/ui.js';
+import { loadDashboard, renderDashboardModel, paintDashboard } from './js/dashboard.js';
+import { loadBalances } from './js/treasury.js';
 
 const $ = (selector) => document.querySelector(selector);
 const API = '/api';
@@ -7,8 +9,10 @@ const sessionId = crypto.randomUUID();
 let account = null;
 let walletProvider = null;
 let walletState = null;
+let publicStatus = null;
 let lastPrepared = null;
 let lastDecision = null;
+let dashboardLoading = false;
 const decimals = { USAT: 6, cNGN: 6, USDC: 6, USDT: 6, USDm: 18 };
 
 function baseUnits(value, places) {
@@ -26,6 +30,15 @@ async function api(path, options = {}) {
   try { data = text ? JSON.parse(text) : {}; } catch { throw new Error(`Control plane returned invalid JSON (${response.status}).`); }
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
   return data;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 function setWalletStatus(message, tone = '') {
@@ -100,6 +113,8 @@ function renderWalletState(state) {
       permissionNote.textContent = 'CIRCUIT never stores your private key. Disconnecting this dapp does not change token approvals.';
     }
   }
+
+  void refreshBalances();
 }
 
 const wallet = createWalletController({ window, onStateChange: renderWalletState });
@@ -155,12 +170,70 @@ async function initializeWallet() {
   await wallet.refresh();
 }
 
+function balanceCards(balances) {
+  return Object.values(balances || {}).map((entry) => {
+    const available = entry?.available !== false;
+    return `<article class="balance-card ${available ? '' : 'unavailable'}"><small>${escapeHtml(entry?.symbol || 'ASSET')}</small><b>${escapeHtml(entry?.display || 'Unavailable')}</b><span>${available ? 'Connected wallet balance' : 'RPC read unavailable'}</span></article>`;
+  }).join('');
+}
+
+async function refreshBalances() {
+  const node = $('#dashboardBalances');
+  if (!node) return;
+  const state = walletState || wallet.getState();
+  if (!state?.account || !state?.provider) {
+    node.innerHTML = '<div class="dashboard-empty compact">Connect a wallet to read live Celo balances.</div>';
+    return;
+  }
+  if (!state.executionAvailable) {
+    node.innerHTML = '<div class="dashboard-empty compact">Wallet connected on another network. Switch to Celo to read execution balances.</div>';
+    return;
+  }
+  if (!publicStatus?.assets) {
+    node.innerHTML = '<div class="dashboard-empty compact">Waiting for Celo asset configuration…</div>';
+    return;
+  }
+  node.innerHTML = '<div class="dashboard-empty compact">Reading Celo balances…</div>';
+  try {
+    const balances = await loadBalances(state.provider, state.account, publicStatus);
+    node.innerHTML = balanceCards(balances);
+  } catch (error) {
+    node.innerHTML = `<div class="dashboard-empty compact">Balance reads unavailable · ${escapeHtml(error?.message || 'unknown error')}</div>`;
+  }
+}
+
+async function refreshDashboard() {
+  if (dashboardLoading) return;
+  dashboardLoading = true;
+  const statusNode = $('#dashboardStatus');
+  if (statusNode) statusNode.textContent = 'Refreshing session evidence…';
+  try {
+    const data = await loadDashboard({ sessionId, walletAddress: wallet.getState().account });
+    const model = renderDashboardModel({
+      metrics: data.metrics,
+      activity: data.activity,
+      mandate: publicStatus?.publicMandate || {}
+    });
+    paintDashboard(model, $);
+    if (statusNode) {
+      statusNode.textContent = model.empty ? 'Live · no session activity yet' : `Live · ${data.activity.length} recent record${data.activity.length === 1 ? '' : 's'}`;
+      statusNode.classList.add('ok');
+    }
+  } catch (error) {
+    if (statusNode) statusNode.textContent = `Dashboard unavailable · ${error?.message || 'unknown error'}`;
+  } finally {
+    dashboardLoading = false;
+  }
+}
+
 async function status() {
   try {
     const data = await api('/status');
+    publicStatus = data;
     $('#apiStatus').textContent = `● ${data.network.name} · ${data.executionMode}`;
     $('#apiStatus').classList.add('ok');
     $('#executionLabel').textContent = `${data.executionMode} MODE`;
+    await Promise.allSettled([refreshDashboard(), refreshBalances()]);
   } catch (error) {
     $('#apiStatus').textContent = `Control plane unavailable · ${error.message}`;
   }
@@ -216,6 +289,7 @@ async function evaluate(event) {
   };
   try {
     paintDecision(await api('/evaluate', { method: 'POST', body: JSON.stringify(payload) }));
+    await refreshDashboard();
   } catch (error) {
     $('#verdict').className = 'verdict block';
     $('#verdict').textContent = 'ERROR';
@@ -285,6 +359,7 @@ $('#walletReconnectAction')?.addEventListener('click', connectWallet);
 $('#walletDisconnectAction')?.addEventListener('click', disconnectWallet);
 $('#walletCopyAction')?.addEventListener('click', copyWalletAddress);
 $('#walletCloseAction')?.addEventListener('click', closeWalletModal);
+$('#dashboardRefresh')?.addEventListener('click', refreshDashboard);
 $('#intentForm').addEventListener('submit', evaluate);
 $('#executeButton').addEventListener('click', execute);
 $('#runJudge').addEventListener('click', runJudge);
