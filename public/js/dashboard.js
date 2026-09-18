@@ -57,15 +57,18 @@ export async function loadDashboard({ sessionId, walletAddress = null, fetchImpl
     fetchImpl(`/api/metrics?sessionId=${encoded}`),
     fetchImpl(`/api/activity?sessionId=${encoded}&limit=50`)
   ]);
-  const [metrics, activity] = await Promise.all([
+  const [metrics, activityPayload] = await Promise.all([
     readJson(metricsResponse, 'metrics'),
     readJson(activityResponse, 'activity')
   ]);
+  const activity = Array.isArray(activityPayload)
+    ? activityPayload
+    : Array.isArray(activityPayload?.items) ? activityPayload.items : [];
   return Object.freeze({
     sessionId: session,
     walletAddress: walletAddress || null,
     metrics: metrics || {},
-    activity: Array.isArray(activity) ? activity : []
+    activity
   });
 }
 
