@@ -45,7 +45,16 @@ function makeStorage() {
   };
 }
 
-async function loadApp({ ethereum, eip6963 = [] } = {}) {
+function textResponse(payload, ok = true, status = 200) {
+  return {
+    ok,
+    status,
+    async text() { return JSON.stringify(payload); },
+    async json() { return payload; }
+  };
+}
+
+async function loadApp({ ethereum, eip6963 = [], fetchImpl } = {}) {
   const elements = new Map();
   const get = (selector) => {
     if (!elements.has(selector)) elements.set(selector, makeElement());
@@ -94,12 +103,12 @@ async function loadApp({ ethereum, eip6963 = [] } = {}) {
     configurable: true
   });
   globalThis.document = { querySelector: get };
-  globalThis.fetch = async (url) => {
+  globalThis.fetch = fetchImpl || (async (url) => {
     const payload = String(url).includes('/judge')
       ? { total: 8, passed: 8, results: [] }
       : { network: { name: 'Celo Mainnet' }, executionMode: 'PREPARE' };
-    return { ok: true, status: 200, async text() { return JSON.stringify(payload); } };
-  };
+    return textResponse(payload);
+  });
 
   await import(`../../public/app.js?wallet-test=${Date.now()}-${Math.random()}`);
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -226,4 +235,80 @@ test('disconnect action clears visible wallet and executable preparation even if
   assert.equal(get('#executeButton').classList.contains('hidden'), true);
   assert.match(get('#walletPermissionNote').textContent, /permission|wallet/i);
   assert.doesNotMatch(get('#walletPermissionNote').textContent, /token approvals? (were|are) revoked/i);
+});
+
+test('executed ALLOW binds the wallet hash to its authorization trace before receipt reconciliation', async () => {
+  const walletAddress = '0x1234567890123456789012345678901234567890';
+  const txHash = `0x${'c'.repeat(64)}`;
+  const traceId = 'trace-submit-ui';
+  const callOrder = [];
+  const submittedBodies = [];
+  const provider = {
+    async request(payload) {
+      if (payload.method === 'eth_accounts') return [];
+      if (payload.method === 'eth_chainId') return '0xa4ec';
+      if (payload.method === 'eth_requestAccounts') return [walletAddress];
+      if (payload.method === 'wallet_switchEthereumChain') return null;
+      if (payload.method === 'eth_getBalance') return '0x0';
+      if (payload.method === 'eth_sendTransaction') {
+        callOrder.push('wallet-send');
+        return txHash;
+      }
+      return [];
+    },
+    on() {}
+  };
+
+  const fetchImpl = async (url, options = {}) => {
+    const path = String(url);
+    if (path.includes('/api/status')) {
+      return textResponse({
+        network: { name: 'Celo Mainnet' }, executionMode: 'PREPARE', assets: {},
+        publicMandate: { maxDailySpendUsd: 100, maxPaymentUsd: 20, maxX402Usd: 2 }
+      });
+    }
+    if (path.includes('/api/judge')) return textResponse({ total: 8, passed: 8, results: [] });
+    if (path.includes('/api/metrics')) return textResponse({ counts: { ALLOW: 0, BLOCK: 0, REVIEW: 0, PAUSE: 0 }, totalAuthorizedUsd: 0, protectedOrReviewedUsd: 0, confirmedTransactions: 0 });
+    if (path.includes('/api/activity')) return textResponse({ items: [] });
+    if (path.includes('/api/evaluate')) {
+      return textResponse({
+        decision: { action: 'ALLOW', reasonCodes: [] },
+        prepared: {
+          to: '0x0000000000000000000000000000000000000001',
+          asset: 'USAT',
+          recipient: '0x1111111111111111111111111111111111111111',
+          amountBaseUnits: '5000000',
+          data: `0xa9059cbb${'0'.repeat(128)}`
+        },
+        trace: { traceId }
+      });
+    }
+    if (path.includes('/api/transaction-submitted')) {
+      callOrder.push('submitted');
+      const body = JSON.parse(options.body);
+      submittedBodies.push(body);
+      return textResponse({ ...body, txStatus: 'SUBMITTED' });
+    }
+    if (path.includes('/api/transaction-status')) {
+      callOrder.push('reconcile');
+      return textResponse({ traceId, txHash, txStatus: 'CONFIRMED', blockNumber: 12345 });
+    }
+    throw new Error(`unexpected URL ${path}`);
+  };
+
+  const { get } = await loadApp({ ethereum: provider, fetchImpl });
+  await get('#walletButton').handlers.click();
+  await get('#walletConnectAction').handlers.click();
+
+  const submitter = makeElement();
+  await get('#intentForm').handlers.submit({ preventDefault() {}, submitter });
+  assert.equal(get('#executeButton').classList.contains('hidden'), false);
+  await get('#executeButton').handlers.click();
+
+  assert.equal(submittedBodies.length, 1);
+  assert.equal(submittedBodies[0].traceId, traceId);
+  assert.equal(submittedBodies[0].txHash, txHash);
+  assert.equal(submittedBodies[0].walletAddress, walletAddress);
+  assert.deepEqual(callOrder.slice(0, 3), ['wallet-send', 'submitted', 'reconcile']);
+  assert.match(get('#walletStatus').textContent, /confirmed|submitted|pending/i);
 });
