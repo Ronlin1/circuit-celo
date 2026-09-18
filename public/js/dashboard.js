@@ -103,3 +103,34 @@ export function renderDashboardModel({ metrics = {}, activity = [], mandate = {}
     activityHtml: rows.length ? rows.map(activityRow).join('') : '<div class="dashboard-empty">No activity yet. Evaluate a real treasury intent to populate this session.</div>'
   });
 }
+
+export function paintDashboard(model, getNode = (selector) => globalThis.document?.querySelector?.(selector)) {
+  if (!model) throw new TypeError('dashboard model is required');
+  const setText = (selector, value) => {
+    const node = getNode(selector);
+    if (node) node.textContent = value;
+  };
+  const setHtml = (selector, value) => {
+    const node = getNode(selector);
+    if (node) node.innerHTML = value;
+  };
+
+  setText('#dashboardIntents', model.kpis.intents);
+  setText('#dashboardAuthorized', model.kpis.authorized);
+  setText('#dashboardProtected', model.kpis.protected);
+  setText('#dashboardConfirmed', model.kpis.confirmed);
+  setText('#dashboardRemaining', model.kpis.remaining);
+  setText('#dashboardActionCap', model.kpis.actionCap);
+  setText('#dashboardX402Cap', model.kpis.x402Cap);
+  setText('#dashboardMandateLabel', model.mandateUtilization.label);
+  setHtml('#dashboardActivity', model.activityHtml);
+
+  const decisions = model.decisionDistribution;
+  setHtml('#dashboardDecision', ['ALLOW', 'BLOCK', 'REVIEW', 'PAUSE']
+    .map((key) => `<span class="decision-stat ${key.toLowerCase()}"><small>${key}</small><b>${decisions[key]}</b></span>`)
+    .join(''));
+
+  const bar = getNode('#dashboardMandateBar');
+  if (bar?.setAttribute) bar.setAttribute('style', `--utilization:${model.mandateUtilization.percent}%`);
+  return model;
+}
