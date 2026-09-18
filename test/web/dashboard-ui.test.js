@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadDashboard, renderDashboardModel } from '../../public/js/dashboard.js';
+import { loadDashboard, renderDashboardModel, paintDashboard } from '../../public/js/dashboard.js';
 import { loadBalances } from '../../public/js/treasury.js';
 
 function jsonResponse(payload, ok = true, status = 200) {
@@ -9,6 +9,16 @@ function jsonResponse(payload, ok = true, status = 200) {
     status,
     async json() { return payload; },
     async text() { return JSON.stringify(payload); }
+  };
+}
+
+function makeNode() {
+  const attributes = new Map();
+  return {
+    textContent: '',
+    innerHTML: '',
+    setAttribute(name, value) { attributes.set(name, String(value)); },
+    getAttribute(name) { return attributes.get(name) ?? null; }
   };
 }
 
@@ -98,6 +108,40 @@ test('decision distribution and mandate utilization are derived only from persis
   assert.deepEqual(model.decisionDistribution, { ALLOW: 4, BLOCK: 2, REVIEW: 1, PAUSE: 1, total: 8 });
   assert.equal(model.mandateUtilization.percent, 75);
   assert.equal(model.mandateUtilization.label, '$75.00 of $100.00 authorized');
+});
+
+test('paint boundary writes KPIs, decision visual, utilization and persisted activity into the Control Center nodes', () => {
+  const nodes = new Map();
+  const get = (selector) => {
+    if (!nodes.has(selector)) nodes.set(selector, makeNode());
+    return nodes.get(selector);
+  };
+  const model = renderDashboardModel({
+    metrics: {
+      counts: { ALLOW: 2, BLOCK: 1, REVIEW: 1, PAUSE: 0 },
+      intentsEvaluated: 4,
+      totalAuthorizedUsd: 12.5,
+      protectedOrReviewedUsd: 30,
+      confirmedTransactions: 1
+    },
+    activity: [{
+      traceId: 'trace-1', timestamp: '2026-09-18T05:00:00.000Z', kind: 'TRANSFER', asset: 'USDC',
+      requestedUsd: 5, decision: 'ALLOW', reasonCodes: [], txStatus: 'CONFIRMED', txHash: `0x${'b'.repeat(64)}`
+    }],
+    mandate: { maxDailySpendUsd: 100, maxPaymentUsd: 20, maxX402Usd: 2 }
+  });
+
+  paintDashboard(model, get);
+  assert.equal(get('#dashboardIntents').textContent, '4');
+  assert.equal(get('#dashboardAuthorized').textContent, '$12.50');
+  assert.equal(get('#dashboardProtected').textContent, '$30.00');
+  assert.equal(get('#dashboardConfirmed').textContent, '1');
+  assert.equal(get('#dashboardRemaining').textContent, '$87.50');
+  assert.match(get('#dashboardDecision').innerHTML, /ALLOW/);
+  assert.match(get('#dashboardDecision').innerHTML, />2</);
+  assert.equal(get('#dashboardMandateLabel').textContent, '$12.50 of $100.00 authorized');
+  assert.match(get('#dashboardMandateBar').getAttribute('style'), /12\.5%/);
+  assert.match(get('#dashboardActivity').innerHTML, /CONFIRMED/);
 });
 
 test('balance loader reads CELO and every configured ERC-20 with balanceOf', async () => {
