@@ -89,7 +89,10 @@ async function loadApp({ ethereum, eip6963 = [] } = {}) {
     },
     open() {}
   };
-  globalThis.navigator = { clipboard: { async writeText() {} } };
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { clipboard: { async writeText() {} } },
+    configurable: true
+  });
   globalThis.document = { querySelector: get };
   globalThis.fetch = async (url) => {
     const payload = String(url).includes('/judge')
