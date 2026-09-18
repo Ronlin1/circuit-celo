@@ -105,6 +105,43 @@ export async function recordSubmittedTransaction({ sessionId, traceId, txHash, w
   }, fetchImpl);
 }
 
+export async function submitPreparedTransaction({
+  decision,
+  prepared,
+  provider,
+  walletAddress,
+  sessionId,
+  traceId,
+  fetchImpl = globalThis.fetch
+} = {}) {
+  if (decision?.action !== 'ALLOW') throw new Error('Only ALLOW can cross the browser execution boundary');
+  if (!provider?.request) throw new TypeError('wallet provider is required');
+
+  const wallet = String(walletAddress || '');
+  if (!EVM_ADDRESS.test(wallet)) throw new TypeError('wallet address must be a valid EVM address');
+  const to = String(prepared?.to || '');
+  if (!EVM_ADDRESS.test(to)) throw new TypeError('prepared transaction destination must be a valid EVM address');
+  const data = String(prepared?.data || '');
+  if (!/^0x[0-9a-fA-F]*$/.test(data)) throw new TypeError('prepared transaction data must be hex calldata');
+  const session = requiredText(sessionId, 'sessionId');
+  const trace = requiredText(traceId, 'traceId');
+
+  const txHash = await provider.request({
+    method: 'eth_sendTransaction',
+    params: [{ from: wallet, to, data, value: '0x0' }]
+  });
+
+  const activity = await recordSubmittedTransaction({
+    sessionId: session,
+    traceId: trace,
+    txHash,
+    walletAddress: wallet,
+    fetchImpl
+  });
+
+  return Object.freeze({ txHash, activity });
+}
+
 export async function reconcileTransaction({ sessionId, traceId, fetchImpl = globalThis.fetch } = {}) {
   const session = requiredText(sessionId, 'sessionId');
   const trace = requiredText(traceId, 'traceId');
