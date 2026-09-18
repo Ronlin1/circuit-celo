@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   recordSubmittedTransaction,
   reconcileTransaction,
-  pollTransactionStatus
+  pollTransactionStatus,
+  submitPreparedTransaction
 } from '../../public/js/treasury.js';
 
 function response(payload, ok = true, status = 200) {
@@ -19,6 +20,11 @@ const SESSION = 'browser-session-1';
 const TRACE = 'trace-live-1';
 const WALLET = '0x1234567890123456789012345678901234567890';
 const HASH = `0x${'a'.repeat(64)}`;
+const PREPARED = {
+  to: '0x0000000000000000000000000000000000000001',
+  data: '0xa9059cbb' + '0'.repeat(128),
+  asset: 'USDC'
+};
 
 test('wallet hash is persisted as SUBMITTED before any receipt confirmation', async () => {
   const calls = [];
@@ -50,6 +56,59 @@ test('wallet hash is persisted as SUBMITTED before any receipt confirmation', as
     txHash: HASH,
     walletAddress: WALLET
   });
+});
+
+test('guarded browser submit calls wallet first, then persists SUBMITTED with the authorization trace', async () => {
+  const order = [];
+  const provider = {
+    async request(payload) {
+      order.push({ type: 'wallet', payload });
+      assert.equal(payload.method, 'eth_sendTransaction');
+      assert.deepEqual(payload.params, [{ from: WALLET, to: PREPARED.to, data: PREPARED.data, value: '0x0' }]);
+      return HASH;
+    }
+  };
+  const fetchImpl = async (url, options) => {
+    order.push({ type: 'api', url: String(url), options });
+    return response({ traceId: TRACE, txHash: HASH, txStatus: 'SUBMITTED', walletAddress: WALLET });
+  };
+
+  const result = await submitPreparedTransaction({
+    decision: { action: 'ALLOW' },
+    prepared: PREPARED,
+    provider,
+    walletAddress: WALLET,
+    sessionId: SESSION,
+    traceId: TRACE,
+    fetchImpl
+  });
+
+  assert.equal(result.txHash, HASH);
+  assert.equal(result.activity.txStatus, 'SUBMITTED');
+  assert.deepEqual(order.map((entry) => entry.type), ['wallet', 'api']);
+  assert.equal(order[1].url, '/api/transaction-submitted');
+});
+
+test('guarded browser submit never invokes wallet or API for a non-ALLOW verdict', async () => {
+  let walletCalled = false;
+  let apiCalled = false;
+  const provider = { async request() { walletCalled = true; return HASH; } };
+  const fetchImpl = async () => { apiCalled = true; return response({}); };
+
+  await assert.rejects(
+    () => submitPreparedTransaction({
+      decision: { action: 'REVIEW' },
+      prepared: PREPARED,
+      provider,
+      walletAddress: WALLET,
+      sessionId: SESSION,
+      traceId: TRACE,
+      fetchImpl
+    }),
+    /ALLOW/i
+  );
+  assert.equal(walletCalled, false);
+  assert.equal(apiCalled, false);
 });
 
 test('receipt reconciliation is a separate request and returns server-authoritative status', async () => {
