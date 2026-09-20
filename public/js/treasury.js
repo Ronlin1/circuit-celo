@@ -130,16 +130,25 @@ export async function submitPreparedTransaction({
     method: 'eth_sendTransaction',
     params: [{ from: wallet, to, data, value: '0x0' }]
   });
+  const hash = String(txHash || '');
+  if (!TX_HASH.test(hash)) throw new TypeError('wallet returned an invalid transaction hash');
 
-  const activity = await recordSubmittedTransaction({
-    sessionId: session,
-    traceId: trace,
-    txHash,
-    walletAddress: wallet,
-    fetchImpl
-  });
-
-  return Object.freeze({ txHash, activity });
+  try {
+    const activity = await recordSubmittedTransaction({
+      sessionId: session,
+      traceId: trace,
+      txHash: hash,
+      walletAddress: wallet,
+      fetchImpl
+    });
+    return Object.freeze({ txHash: hash, activity });
+  } catch (cause) {
+    const error = new Error(`Transaction was broadcast to Celo as ${hash}, but CIRCUIT could not record the submission.`);
+    error.code = 'SUBMISSION_RECORD_FAILED';
+    error.txHash = hash;
+    error.cause = cause;
+    throw error;
+  }
 }
 
 export async function reconcileTransaction({ sessionId, traceId, fetchImpl = globalThis.fetch } = {}) {
