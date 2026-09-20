@@ -1,7 +1,7 @@
 import { createWalletController } from './js/wallet.js';
 import { shortAddress, walletChainLabel, walletStatusView } from './js/ui.js';
 import { loadDashboard, renderDashboardModel, paintDashboard } from './js/dashboard.js';
-import { loadBalances } from './js/treasury.js';
+import { loadBalances, submitPreparedTransaction, pollTransactionStatus } from './js/treasury.js';
 
 const $ = (selector) => document.querySelector(selector);
 const API = '/api';
@@ -12,6 +12,7 @@ let walletState = null;
 let publicStatus = null;
 let lastPrepared = null;
 let lastDecision = null;
+let lastTraceId = null;
 let dashboardLoading = false;
 const decimals = { USAT: 6, cNGN: 6, USDC: 6, USDT: 6, USDm: 18 };
 
@@ -57,6 +58,7 @@ function setHidden(selector, hidden) {
 function clearExecutableState() {
   lastPrepared = null;
   lastDecision = null;
+  lastTraceId = null;
   setHidden('#prepared', true);
   setHidden('#executeButton', true);
   setHidden('#txLink', true);
@@ -242,6 +244,7 @@ async function status() {
 function paintDecision(data) {
   lastDecision = data.decision;
   lastPrepared = data.prepared;
+  lastTraceId = data.trace?.traceId || null;
   const action = data.decision.action;
   const verdict = $('#verdict');
   verdict.className = `verdict ${action.toLowerCase()}`;
@@ -258,9 +261,9 @@ function paintDecision(data) {
   const prepared = $('#prepared');
   const executeButton = $('#executeButton');
   $('#txLink').classList.add('hidden');
-  if (data.prepared) {
+  if (data.prepared && lastTraceId) {
     prepared.classList.remove('hidden');
-    prepared.textContent = `EXECUTABLE CELO PAYLOAD\nto: ${data.prepared.to}\nasset: ${data.prepared.asset}\nrecipient: ${data.prepared.recipient}\nbase units: ${data.prepared.amountBaseUnits}\ndata: ${data.prepared.data.slice(0, 34)}…${data.prepared.data.slice(-18)}\ntrace: ${data.trace.traceId}`;
+    prepared.textContent = `EXECUTABLE CELO PAYLOAD\nto: ${data.prepared.to}\nasset: ${data.prepared.asset}\nrecipient: ${data.prepared.recipient}\nbase units: ${data.prepared.amountBaseUnits}\ndata: ${data.prepared.data.slice(0, 34)}…${data.prepared.data.slice(-18)}\ntrace: ${lastTraceId}`;
     executeButton.classList.remove('hidden');
   } else {
     prepared.classList.add('hidden');
@@ -302,8 +305,8 @@ async function evaluate(event) {
 }
 
 async function execute() {
-  if (lastDecision?.action !== 'ALLOW' || !lastPrepared) {
-    setWalletStatus('Execution boundary is closed until CIRCUIT returns ALLOW.', 'warn');
+  if (lastDecision?.action !== 'ALLOW' || !lastPrepared || !lastTraceId) {
+    setWalletStatus('Execution boundary is closed until CIRCUIT returns a traceable ALLOW.', 'warn');
     return;
   }
 
@@ -323,15 +326,45 @@ async function execute() {
   button.textContent = 'Confirm in wallet…';
   setWalletStatus(`Requesting ${lastPrepared.asset} signature from your wallet…`);
   try {
-    const hash = await walletProvider.request({
-      method: 'eth_sendTransaction',
-      params: [{ from: account, to: lastPrepared.to, data: lastPrepared.data, value: '0x0' }]
+    const submitted = await submitPreparedTransaction({
+      decision: lastDecision,
+      prepared: lastPrepared,
+      provider: walletProvider,
+      walletAddress: account,
+      sessionId,
+      traceId: lastTraceId,
+      fetchImpl: fetch
     });
+    const hash = submitted.txHash;
     const link = $('#txLink');
     link.href = `https://celoscan.io/tx/${hash}`;
-    link.textContent = `Mainnet receipt ${hash.slice(0, 10)}… ↗`;
+    link.textContent = `Submitted ${hash.slice(0, 10)}… · CeloScan ↗`;
     link.classList.remove('hidden');
-    setWalletStatus('Transaction submitted to Celo · receipt available below', 'ok');
+    setWalletStatus('Transaction submitted to Celo · confirmation pending.', 'ok');
+    await refreshDashboard();
+
+    try {
+      const receipt = await pollTransactionStatus({
+        sessionId,
+        traceId: lastTraceId,
+        maxAttempts: 5,
+        delayMs: 1500,
+        fetchImpl: fetch
+      });
+      if (receipt.txStatus === 'CONFIRMED') {
+        setWalletStatus(`Transaction confirmed on Celo${receipt.blockNumber != null ? ` · block ${receipt.blockNumber}` : ''}.`, 'ok');
+        link.textContent = `Confirmed ${hash.slice(0, 10)}… · CeloScan ↗`;
+      } else if (receipt.txStatus === 'FAILED') {
+        setWalletStatus('Transaction was submitted but failed on Celo. Inspect the CeloScan receipt.', 'warn');
+        link.textContent = `Failed ${hash.slice(0, 10)}… · CeloScan ↗`;
+      } else {
+        setWalletStatus('Transaction submitted to Celo · receipt not confirmed yet.', 'warn');
+      }
+    } catch (error) {
+      setWalletStatus(`Transaction submitted to Celo · confirmation check unavailable · ${error?.message || 'unknown error'}`, 'warn');
+    }
+
+    await Promise.allSettled([refreshDashboard(), refreshBalances()]);
   } catch (error) {
     setWalletStatus(error?.code === 4001 ? 'Transaction cancelled in your wallet.' : `Transaction failed · ${error?.message || 'Unknown wallet error'}`, 'warn');
   } finally {
