@@ -89,6 +89,37 @@ test('guarded browser submit calls wallet first, then persists SUBMITTED with th
   assert.equal(order[1].url, '/api/transaction-submitted');
 });
 
+test('guarded browser submit preserves tx hash when the wallet broadcast succeeds but persistence fails', async () => {
+  let walletCalls = 0;
+  const provider = {
+    async request(payload) {
+      walletCalls += 1;
+      assert.equal(payload.method, 'eth_sendTransaction');
+      return HASH;
+    }
+  };
+  const fetchImpl = async () => response({ error: 'Authorization state unavailable' }, false, 503);
+
+  await assert.rejects(
+    () => submitPreparedTransaction({
+      decision: { action: 'ALLOW' },
+      prepared: PREPARED,
+      provider,
+      walletAddress: WALLET,
+      sessionId: SESSION,
+      traceId: TRACE,
+      fetchImpl
+    }),
+    (error) => {
+      assert.equal(error.code, 'SUBMISSION_RECORD_FAILED');
+      assert.equal(error.txHash, HASH);
+      assert.match(error.message, /broadcast|submitted/i);
+      return true;
+    }
+  );
+  assert.equal(walletCalls, 1);
+});
+
 test('guarded browser submit never invokes wallet or API for a non-ALLOW verdict', async () => {
   let walletCalled = false;
   let apiCalled = false;
