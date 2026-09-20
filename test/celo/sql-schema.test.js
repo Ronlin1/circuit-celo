@@ -9,6 +9,7 @@ test('durable activity schema keeps browser roles out and grants server-only Sup
   assert.match(sql, /revoke all on table public\.circuit_activity from anon, authenticated;/i);
   assert.match(sql, /grant select, update on table public\.circuit_activity to service_role;/i);
   assert.match(sql, /revoke all on function public\.append_circuit_activity\(jsonb\) from public;/i);
+  assert.match(sql, /revoke all on function public\.append_circuit_activity\(jsonb\) from anon, authenticated;/i);
   assert.match(sql, /grant execute on function public\.append_circuit_activity\(jsonb\) to service_role;/i);
 });
 
