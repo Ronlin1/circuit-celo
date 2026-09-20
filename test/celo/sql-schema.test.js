@@ -4,8 +4,10 @@ import { readFileSync } from 'node:fs';
 
 const sql = readFileSync(new URL('../../docs/sql/activity-store.sql', import.meta.url), 'utf8');
 
-test('durable activity schema keeps browser roles out and grants the append RPC to service_role', () => {
+test('durable activity schema keeps browser roles out and grants server-only Supabase access', () => {
   assert.match(sql, /alter table public\.circuit_activity enable row level security;/i);
+  assert.match(sql, /revoke all on table public\.circuit_activity from anon, authenticated;/i);
+  assert.match(sql, /grant select, update on table public\.circuit_activity to service_role;/i);
   assert.match(sql, /revoke all on function public\.append_circuit_activity\(jsonb\) from public;/i);
   assert.match(sql, /grant execute on function public\.append_circuit_activity\(jsonb\) to service_role;/i);
 });
