@@ -150,7 +150,7 @@ The deployment publishes [`/skill.md`](public/skill.md) for agent discovery and 
 - **One-shot browser execution:** a broadcast authorization is consumed to reduce accidental duplicate sends.
 - **Demo-address protection:** the public demo recipient cannot cross the wallet execution boundary.
 - **Durable production authorization state:** Vercel/Node production forces the Supabase store and fails closed if it is unavailable or misconfigured.
-- **Server-only database access:** browser roles are denied direct activity-table access; the service-role credential stays in server functions only.
+- **Server-only database access:** browser roles are denied direct activity-table/RPC access; the Supabase server secret stays in server functions only.
 - **Auditable decisions:** authorization events are written to a hash-linked Flight Recorder.
 - **Reproducible control layer:** deterministic policy and trace primitives are loaded from a pinned `circuit-core` revision.
 
@@ -179,17 +179,17 @@ npm run secret:scan
 Production intentionally fails closed if durable authorization state is not configured. Before deploying to Vercel or another `NODE_ENV=production` runtime:
 
 1. Create or select a Supabase project for CIRCUIT.
-2. Run [`docs/sql/activity-store.sql`](docs/sql/activity-store.sql) once in that project's SQL editor. The migration creates the durable activity table, hash-chain append RPC, indexes, RLS configuration, and explicit `service_role` permissions.
+2. Run [`docs/sql/activity-store.sql`](docs/sql/activity-store.sql) once in that project's SQL editor. The migration creates the durable activity table, hash-chain append RPC, indexes, RLS configuration, and explicit server-only permissions.
 3. Configure these **server-side production environment variables**:
 
 ```text
 SUPABASE_URL=<your Supabase project URL>
-SUPABASE_SERVICE_ROLE_KEY=<server-only service role key>
+SUPABASE_SECRET_KEY=<server-only sb_secret_... key>
 CIRCUIT_EXECUTION_MODE=PREPARE
 CELO_RPC_URL=https://forno.celo.org
 ```
 
-`SUPABASE_SERVICE_ROLE_KEY` must never be placed in browser/public variables such as `NEXT_PUBLIC_*`, `VITE_*`, or committed files.
+`SUPABASE_SECRET_KEY` is preferred for new deployments. CIRCUIT also accepts the legacy `SUPABASE_SERVICE_ROLE_KEY` as a migration fallback. Neither key may be placed in browser/public variables such as `NEXT_PUBLIC_*`, `VITE_*`, or committed files.
 
 In production, CIRCUIT forces the durable Supabase ActivityStore even if `CIRCUIT_ACTIVITY_STORE=memory` is supplied. If the Supabase credentials, schema, or state read are unavailable, authorization requests return `503 AUTHORIZATION_STATE_UNAVAILABLE`; CIRCUIT does not silently downgrade to memory.
 
@@ -199,7 +199,7 @@ Keep `CIRCUIT_EXECUTION_MODE=PREPARE` unless the execution model is intentionall
 
 - `npm run verify` is fully green.
 - `docs/sql/activity-store.sql` has been applied to the production Supabase project.
-- `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are present only in server-side production settings.
+- `SUPABASE_URL` and `SUPABASE_SECRET_KEY` (or the legacy service-role fallback) are present only in server-side production settings.
 - `/api/status` returns Celo Mainnet `42220`, `PREPARE`, and a durable state model.
 - `/api/judge` returns `8 / 8` expected controls.
 - A production evaluation persists and appears through `/api/activity` for the same session.
