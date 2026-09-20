@@ -13,6 +13,7 @@ function runtimeEnv() {
     CIRCUIT_EXECUTION_MODE: process.env.CIRCUIT_EXECUTION_MODE || 'PREPARE',
     CIRCUIT_ACTIVITY_STORE: isProduction ? 'supabase' : (process.env.CIRCUIT_ACTIVITY_STORE || 'memory'),
     SUPABASE_URL: process.env.SUPABASE_URL || undefined,
+    SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY || undefined,
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || undefined,
     CELO_RPC_URL: process.env.CELO_RPC_URL || CELO_MAINNET.rpcUrl,
     USAT_TOKEN_ADDRESS: process.env.USAT_TOKEN_ADDRESS || undefined,
