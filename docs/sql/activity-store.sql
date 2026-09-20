@@ -130,4 +130,5 @@ end;
 $$;
 
 revoke all on function public.append_circuit_activity(jsonb) from public;
+revoke all on function public.append_circuit_activity(jsonb) from anon, authenticated;
 grant execute on function public.append_circuit_activity(jsonb) to service_role;
