@@ -5,6 +5,7 @@ import { loadBalances, submitPreparedTransaction, pollTransactionStatus } from '
 
 const $ = (selector) => document.querySelector(selector);
 const API = '/api';
+const DEMO_RECIPIENT = '0x1111111111111111111111111111111111111111';
 const sessionId = crypto.randomUUID();
 let account = null;
 let walletProvider = null;
@@ -14,6 +15,7 @@ let lastPrepared = null;
 let lastDecision = null;
 let lastTraceId = null;
 let dashboardLoading = false;
+let executionInFlight = false;
 const decimals = { USAT: 6, cNGN: 6, USDC: 6, USDT: 6, USDm: 18 };
 
 function baseUnits(value, places) {
@@ -62,6 +64,15 @@ function clearExecutableState() {
   setHidden('#prepared', true);
   setHidden('#executeButton', true);
   setHidden('#txLink', true);
+}
+
+function consumeExecutableState(traceId) {
+  if (traceId && lastTraceId !== traceId) return;
+  lastPrepared = null;
+  lastDecision = null;
+  lastTraceId = null;
+  setHidden('#prepared', true);
+  setHidden('#executeButton', true);
 }
 
 function renderWalletState(state) {
@@ -305,8 +316,20 @@ async function evaluate(event) {
 }
 
 async function execute() {
+  if (executionInFlight) {
+    setWalletStatus('A wallet execution is already in progress.', 'warn');
+    return;
+  }
   if (lastDecision?.action !== 'ALLOW' || !lastPrepared || !lastTraceId) {
     setWalletStatus('Execution boundary is closed until CIRCUIT returns a traceable ALLOW.', 'warn');
+    return;
+  }
+
+  const executionDecision = lastDecision;
+  const executionPrepared = lastPrepared;
+  const executionTraceId = lastTraceId;
+  if (String(executionPrepared.recipient || '').toLowerCase() === DEMO_RECIPIENT) {
+    setWalletStatus('The demo recipient is evaluation-only. Enter a real recipient and re-evaluate before signing.', 'warn');
     return;
   }
 
@@ -322,20 +345,22 @@ async function execute() {
   account = state.account;
   walletProvider = state.provider;
   const button = $('#executeButton');
+  executionInFlight = true;
   button.disabled = true;
   button.textContent = 'Confirm in wallet…';
-  setWalletStatus(`Requesting ${lastPrepared.asset} signature from your wallet…`);
+  setWalletStatus(`Requesting ${executionPrepared.asset} signature from your wallet…`);
   try {
     const submitted = await submitPreparedTransaction({
-      decision: lastDecision,
-      prepared: lastPrepared,
+      decision: executionDecision,
+      prepared: executionPrepared,
       provider: walletProvider,
       walletAddress: account,
       sessionId,
-      traceId: lastTraceId,
+      traceId: executionTraceId,
       fetchImpl: fetch
     });
     const hash = submitted.txHash;
+    consumeExecutableState(executionTraceId);
     const link = $('#txLink');
     link.href = `https://celoscan.io/tx/${hash}`;
     link.textContent = `Submitted ${hash.slice(0, 10)}… · CeloScan ↗`;
@@ -346,7 +371,7 @@ async function execute() {
     try {
       const receipt = await pollTransactionStatus({
         sessionId,
-        traceId: lastTraceId,
+        traceId: executionTraceId,
         maxAttempts: 5,
         delayMs: 1500,
         fetchImpl: fetch
@@ -366,8 +391,21 @@ async function execute() {
 
     await Promise.allSettled([refreshDashboard(), refreshBalances()]);
   } catch (error) {
-    setWalletStatus(error?.code === 4001 ? 'Transaction cancelled in your wallet.' : `Transaction failed · ${error?.message || 'Unknown wallet error'}`, 'warn');
+    if (error?.code === 'SUBMISSION_RECORD_FAILED' && error?.txHash) {
+      consumeExecutableState(executionTraceId);
+      const link = $('#txLink');
+      link.href = `https://celoscan.io/tx/${error.txHash}`;
+      link.textContent = `Broadcast ${error.txHash.slice(0, 10)}… · verify on CeloScan ↗`;
+      link.classList.remove('hidden');
+      setWalletStatus('Transaction was broadcast to Celo, but CIRCUIT could not record it. Do not resubmit. Verify the hash on CeloScan.', 'warn');
+      await Promise.allSettled([refreshDashboard(), refreshBalances()]);
+    } else if (error?.code === 4001) {
+      setWalletStatus('Transaction cancelled in your wallet.', 'warn');
+    } else {
+      setWalletStatus(`Transaction failed · ${error?.message || 'Unknown wallet error'}`, 'warn');
+    }
   } finally {
+    executionInFlight = false;
     button.disabled = false;
     button.textContent = 'Sign & execute on Celo';
   }
