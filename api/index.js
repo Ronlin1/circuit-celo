@@ -8,9 +8,10 @@ import { CELO_MAINNET } from '../src/celo/config.js';
 const developmentMemoryStore = createMemoryActivityStore();
 
 function runtimeEnv() {
+  const isProduction = process.env.VERCEL_ENV === 'production' || process.env.NODE_ENV === 'production';
   return {
     CIRCUIT_EXECUTION_MODE: process.env.CIRCUIT_EXECUTION_MODE || 'PREPARE',
-    CIRCUIT_ACTIVITY_STORE: process.env.CIRCUIT_ACTIVITY_STORE || 'memory',
+    CIRCUIT_ACTIVITY_STORE: isProduction ? 'supabase' : (process.env.CIRCUIT_ACTIVITY_STORE || 'memory'),
     SUPABASE_URL: process.env.SUPABASE_URL || undefined,
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || undefined,
     CELO_RPC_URL: process.env.CELO_RPC_URL || CELO_MAINNET.rpcUrl,
