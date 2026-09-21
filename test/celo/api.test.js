@@ -79,11 +79,12 @@ test('public evaluator pauses an intent already present in the authoritative sto
 
 test('daily budget evidence survives a fresh evaluator when the same durable store is used', async () => {
   const store = createMemoryActivityStore();
+  const today = new Date().toISOString().slice(0, 10);
   for (let index = 0; index < 5; index += 1) {
     await store.appendEvaluation(durableRecord({
       traceId: `budget-trace-${index}`,
       intentId: `budget-intent-${index}`,
-      timestamp: `2026-09-14T0${index + 1}:00:00.000Z`,
+      timestamp: `${today}T0${index + 1}:00:00.000Z`,
       previousHash: index === 0 ? null : `budget-hash-${index - 1}`,
       currentHash: `budget-hash-${index}`
     }));

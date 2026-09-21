@@ -40,9 +40,11 @@ create index if not exists circuit_activity_decision_idx
 
 alter table public.circuit_activity enable row level security;
 
--- No anon/authenticated policies are created. Service-role access is used only
--- from CIRCUIT server routes. This keeps browser clients from querying private
--- session activity directly.
+-- No anon/authenticated policies are created. Keep direct browser roles out even
+-- if project-level default grants change later. The service role is used only
+-- from CIRCUIT server routes and never exposed to browser code.
+revoke all on table public.circuit_activity from anon, authenticated;
+grant select, update on table public.circuit_activity to service_role;
 
 comment on table public.circuit_activity is
   'CIRCUIT Treasury authorization decisions and Celo transaction lifecycle evidence.';
@@ -128,3 +130,5 @@ end;
 $$;
 
 revoke all on function public.append_circuit_activity(jsonb) from public;
+revoke all on function public.append_circuit_activity(jsonb) from anon, authenticated;
+grant execute on function public.append_circuit_activity(jsonb) to service_role;

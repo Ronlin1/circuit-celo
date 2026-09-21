@@ -185,9 +185,10 @@ export function createMemoryActivityStore() {
 
 export function createSupabaseActivityStore(env = process.env, options = {}) {
   if (!env.SUPABASE_URL) throw new Error('SUPABASE_URL is required for Supabase activity store');
-  if (!env.SUPABASE_SERVICE_ROLE_KEY) throw new Error('SUPABASE_SERVICE_ROLE_KEY is required for Supabase activity store');
+  const secretKey = env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!secretKey) throw new Error('SUPABASE_SECRET_KEY is required for Supabase activity store (legacy SUPABASE_SERVICE_ROLE_KEY also supported)');
 
-  const client = options.client || createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+  const client = options.client || createClient(env.SUPABASE_URL, secretKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
   });
 

@@ -126,13 +126,25 @@ test('list is newest-first, session scoped, and clamps limits to 200', async () 
 
 test('production store configuration fails early when Supabase credentials are missing', () => {
   assert.throws(
-    () => createSupabaseActivityStore({ SUPABASE_SERVICE_ROLE_KEY: 'secret' }),
+    () => createSupabaseActivityStore({ SUPABASE_SECRET_KEY: 'secret' }),
     /SUPABASE_URL is required/
   );
   assert.throws(
     () => createSupabaseActivityStore({ SUPABASE_URL: 'https://example.supabase.co' }),
-    /SUPABASE_SERVICE_ROLE_KEY is required/
+    /SUPABASE_(SECRET|SERVICE_ROLE)_KEY is required/
   );
+});
+
+test('Supabase store accepts the modern secret key with legacy service-role fallback', () => {
+  const client = {};
+  assert.doesNotThrow(() => createSupabaseActivityStore(
+    { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SECRET_KEY: 'sb_secret_modern' },
+    { client }
+  ));
+  assert.doesNotThrow(() => createSupabaseActivityStore(
+    { SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'legacy-secret' },
+    { client }
+  ));
 });
 
 test('activity store factory defaults to memory but does not silently downgrade explicit Supabase mode', () => {
