@@ -12,14 +12,3 @@ jobs:
           node-version: '22.16.0'
       - run: npm install --no-audit --no-fund
       - run: npm run verify
-      - name: Package verified source for deployment
-        if: github.ref == 'refs/heads/feature/control-center-mcp'
-        uses: actions/upload-artifact@v4
-        with:
-          name: circuit-celo-source
-          path: |
-            .
-            !node_modules
-            !.git
-          include-hidden-files: true
-          retention-days: 1
